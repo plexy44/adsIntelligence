@@ -1328,5 +1328,8 @@ export default function App() {
                    {activeTab === 'deepdive' && <DeepDiveDashboard data={data} />}
                 </>
              )}
-          </div>
+      </div>
       </main>
+    </div>
+  );
+}
