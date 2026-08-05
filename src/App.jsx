@@ -1,1335 +1,2050 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { 
-  XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, 
-  AreaChart, Area, Line, ComposedChart, Legend, BarChart, Bar, Cell, 
-  LineChart, ScatterChart, Scatter
+import React, { useState, useEffect, useMemo, useRef, createContext, useContext, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import {
+  ResponsiveContainer, ComposedChart, LineChart, BarChart, ScatterChart,
+  Line, Area, Bar, Scatter, Cell, XAxis, YAxis, ZAxis, CartesianGrid,
+  Tooltip as RTooltip, ReferenceLine, ReferenceArea, Legend,
 } from 'recharts';
-import { 
-  Upload, CheckCircle, AlertCircle, RefreshCw, Activity, 
-  TrendingUp, TrendingDown, DollarSign, Target, MousePointerClick, 
-  BarChart2, Layers, Sparkles, LayoutDashboard, Search, Calendar, Info,
-  BarChart3, LineChart as LineChartIcon, ScatterChart as ScatterChartIcon, ArrowRightLeft,
-  ChevronUp, ChevronDown, ListOrdered, Filter
+import {
+  Upload, Database, LayoutDashboard, Table2, Crosshair, GitCompare, Boxes,
+  History, Wallet, Sun, Moon, AlertTriangle, CheckCircle2, Info, X, Trash2,
+  Pencil, Download, Copy, ChevronRight, ChevronDown, ChevronUp, Search,
+  Target, Scissors, TrendingUp, TrendingDown, Flame, ShieldAlert, Lightbulb,
+  Gauge, Sparkles, ArrowRight, RefreshCw, SlidersHorizontal, FileWarning,
 } from 'lucide-react';
 
-// --- ROBUST LEXICAL CSV PARSER ---
-const parseCSV = (text) => {
-    const lines = [];
-    let currentLine = [];
-    let currentCell = '';
-    let inQuotes = false;
-    
-    for (let i = 0; i < text.length; i++) {
-        const c = text[i];
-        const next = text[i + 1];
-        
-        if (c === '"') {
-            if (inQuotes && next === '"') {
-                currentCell += '"';
-                i++; 
-            } else {
-                inQuotes = !inQuotes;
-            }
-        } else if (c === ',' && !inQuotes) {
-            currentLine.push(currentCell);
-            currentCell = '';
-        } else if ((c === '\n' || c === '\r') && !inQuotes) {
-            if (c === '\r' && next === '\n') i++; 
-            currentLine.push(currentCell);
-            if (currentLine.some(cell => cell.trim() !== '')) lines.push(currentLine);
-            currentLine = [];
-            currentCell = '';
-        } else {
-            currentCell += c;
-        }
-    }
-    
-    if (currentCell !== '' || currentLine.length > 0) {
-        currentLine.push(currentCell);
-        if (currentLine.some(cell => cell.trim() !== '')) lines.push(currentLine);
-    }
-    return lines;
+import {
+  parseMetaCSV, aggregate, buildBenchmarks, scoreEntities, generateFindings,
+  analyseNaming, comparePeriods, timeSeries, simulateReallocation, entitySeries,
+  entityKey, compareRates, median, VERDICTS, DEFAULTS, toCSV, groupByDimension,
+} from './engine.js';
+
+/* ===================================================================== */
+/* Theme + primitives                                                     */
+/* ===================================================================== */
+
+const ThemeCtx = createContext('dark');
+const useTheme = () => useContext(ThemeCtx);
+
+const CSSVAR = (name, fallback = '#888') => {
+  if (typeof window === 'undefined') return fallback;
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name);
+  return v ? v.trim() : fallback;
 };
 
-// --- UTILS & FORMATTERS ---
-
-const formatToUKDate = (dateStr) => {
-    if (!dateStr || !dateStr.includes('-')) return dateStr;
-    const [y, m, d] = dateStr.split('-');
-    if (y.length !== 4) return dateStr;
-    
-    const dateObj = new Date(y, parseInt(m) - 1, d);
-    if (isNaN(dateObj)) return dateStr;
-    
-    const day = dateObj.getDate();
-    const suffix = ["th", "st", "nd", "rd"][day % 10 > 3 ? 0 : (day % 100 - day % 10 !== 10) * day % 10];
-    const month = dateObj.toLocaleString('en-GB', { month: 'short' });
-    return `${day}${suffix} ${month} ${y}`;
+// Portal tooltip: an explanation must never be clipped by a card, and it
+// must never be the only place a number's meaning lives.
+const Tip = ({ tip, children, className, as: As = 'span' }) => {
+  const ref = useRef(null);
+  const [pos, setPos] = useState(null);
+  if (!tip) return children;
+  const show = () => {
+    const r = ref.current?.getBoundingClientRect();
+    if (!r) return;
+    const below = r.top < 150;
+    setPos({
+      x: Math.min(Math.max(r.left + r.width / 2, 170), window.innerWidth - 170),
+      y: below ? r.bottom : r.top, below,
+    });
+  };
+  return (
+    <As ref={ref} onMouseEnter={show} onMouseLeave={() => setPos(null)}
+      onClick={() => setPos(null)} className={className || 'inline-flex'}>
+      {children}
+      {pos && createPortal(
+        <div className={`tip ${pos.below ? 'below' : ''}`} style={{ left: pos.x, top: pos.y }}>{tip}</div>,
+        document.body)}
+    </As>
+  );
 };
 
-const getGranularDate = (dateStr, granularity) => {
-    if (!dateStr || dateStr === 'Unknown') return 'Unknown';
-    const [y, m, d] = dateStr.split('-');
-    const dateObj = new Date(y, parseInt(m) - 1, d);
-    if (isNaN(dateObj)) return dateStr;
+const Card = ({ children, title, icon: Icon, right, className = '', pad = true, quiet }) => (
+  <section className={`card ${quiet ? 'card-quiet' : ''} ${className}`}>
+    {(title || right) && (
+      <header className="flex items-start justify-between gap-3 px-5 pt-4 pb-3">
+        <div className="flex items-center gap-2 min-w-0">
+          {Icon && <Icon size={15} style={{ color: 'var(--accent)' }} className="shrink-0" />}
+          <span className="eyebrow truncate">{title}</span>
+        </div>
+        {right && <div className="shrink-0 flex items-center gap-2">{right}</div>}
+      </header>
+    )}
+    <div className={pad ? 'px-5 pb-5' : ''}>{children}</div>
+  </section>
+);
 
-    if (granularity === 'monthly') {
-        return `${y}-${m}-01`;
-    }
-    if (granularity === 'weekly') {
-        const day = dateObj.getDay() || 7; 
-        dateObj.setDate(dateObj.getDate() - day + 1); 
-        return `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
-    }
-    return dateStr; // daily
+const Stat = ({ label, value, sub, tone, tip, delta }) => (
+  <Tip tip={tip} className="block h-full">
+    <div className="card h-full px-5 py-4 flex flex-col justify-between" style={{ cursor: tip ? 'help' : 'default' }}>
+      <div className="flex items-start justify-between gap-2">
+        <span className="eyebrow leading-relaxed">{label}</span>
+        {delta !== undefined && delta !== null && isFinite(delta) && (
+          <span className={`chip ${delta > 0 ? 't-good' : delta < 0 ? 't-bad' : 't-muted'}`}>
+            {delta > 0 ? <TrendingUp size={10} /> : delta < 0 ? <TrendingDown size={10} /> : null}
+            {Math.abs(delta * 100).toFixed(0)}%
+          </span>
+        )}
+      </div>
+      <div className="mt-3">
+        <div className="num text-[26px] leading-none font-bold" style={{ color: tone || 'var(--ink)' }}>{value}</div>
+        {sub && <div className="text-[11px] mt-1.5" style={{ color: 'var(--ink-4)' }}>{sub}</div>}
+      </div>
+    </div>
+  </Tip>
+);
+
+const Badge = ({ verdict }) => {
+  const v = VERDICTS[verdict] || VERDICTS.thin;
+  const cls = { good: 't-good', warn: 't-warn', bad: 't-bad', neutral: 't-neutral', muted: 't-muted' }[v.tone];
+  const Icon = { scale: TrendingUp, keep: CheckCircle2, watch: Info, fix: SlidersHorizontal, cut: Scissors, starve: Sparkles, thin: FileWarning }[verdict] || Info;
+  return <span className={`chip ${cls}`}><Icon size={10} />{v.label}</span>;
 };
 
-const formatValue = (val, unit) => {
-    if (val === undefined || val === null || isNaN(val)) return '-';
-    const num = Number(val);
-    
-    switch(unit) {
-        case 'currency': return `£${num.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-        case 'percentage': return `${num.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
-        case 'ratio': return `${num.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}x`;
-        case 'integer': return Math.round(num).toLocaleString('en-GB');
-        case 'float': return num.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        default: return num.toLocaleString('en-GB');
-    }
+// Hand-drawn sparkline: dozens of Recharts instances in a table is slow,
+// and this needs no axes.
+const Spark = ({ values, width = 68, height = 20, color }) => {
+  const vals = (values || []).filter(v => typeof v === 'number' && isFinite(v));
+  if (vals.length < 2) return <span style={{ color: 'var(--ink-4)' }}>—</span>;
+  const max = Math.max(...vals), min = Math.min(...vals);
+  const range = max - min || 1;
+  const pts = vals.map((v, i) => `${(i / (vals.length - 1)) * width},${height - ((v - min) / range) * (height - 2) - 1}`).join(' ');
+  return (
+    <svg width={width} height={height} className="inline-block align-middle" aria-hidden>
+      <polyline points={pts} fill="none" stroke={color || 'var(--accent)'} strokeWidth="1.4" strokeLinejoin="round" />
+    </svg>
+  );
 };
 
-const formatYAxisTick = (val, unit) => {
-    if (val === 0) return '0';
-    if (unit === 'currency') return val >= 1000 ? `£${(val/1000).toFixed(1)}k` : `£${val.toFixed(0)}`;
-    if (unit === 'percentage') return `${val.toFixed(1)}%`;
-    if (unit === 'ratio') return `${val.toFixed(1)}x`;
-    return val >= 1000 ? `${(val/1000).toFixed(1)}k` : val.toFixed(0);
+/* ===================================================================== */
+/* Formatting                                                             */
+/* ===================================================================== */
+
+const nf = (v, dp = 0) => v === null || v === undefined || !isFinite(v)
+  ? '—' : v.toLocaleString('en-GB', { minimumFractionDigits: dp, maximumFractionDigits: dp });
+
+const makeFmt = (ds) => {
+  const sym = ds?.currencySymbol ?? '£';
+  return {
+    sym,
+    money: (v, dp = 2) => v === null || v === undefined || !isFinite(v) ? '—' : sym + nf(v, dp),
+    money0: (v) => v === null || v === undefined || !isFinite(v) ? '—' : sym + nf(v, 0),
+    compact: (v) => {
+      if (v === null || v === undefined || !isFinite(v)) return '—';
+      if (Math.abs(v) >= 1e6) return (v / 1e6).toFixed(2) + 'M';
+      if (Math.abs(v) >= 1e4) return (v / 1e3).toFixed(1) + 'k';
+      return nf(v, 0);
+    },
+    moneyCompact: (v) => {
+      if (v === null || v === undefined || !isFinite(v)) return '—';
+      if (Math.abs(v) >= 1e6) return sym + (v / 1e6).toFixed(2) + 'M';
+      if (Math.abs(v) >= 1e4) return sym + (v / 1e3).toFixed(1) + 'k';
+      return sym + nf(v, 0);
+    },
+    int: (v) => v === null || v === undefined || !isFinite(v) ? '—' : nf(v, 0),
+    pct: (v, dp = 2) => v === null || v === undefined || !isFinite(v) ? '—' : nf(v, dp) + '%',
+    ratio: (v) => v === null || v === undefined || !isFinite(v) ? '—' : nf(v, 2) + '×',
+    dec: (v, dp = 2) => v === null || v === undefined || !isFinite(v) ? '—' : nf(v, dp),
+  };
 };
 
-const ENTITY_COLORS = ['#818cf8', '#2dd4bf', '#fb7185']; 
-const METRIC_DASHES = ['', '5 5', '1 3']; 
+const shortDate = (iso) => {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-');
+  return `${d} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][+m - 1]}`;
+};
+const longDate = (iso) => iso ? `${shortDate(iso)} ${iso.slice(0, 4)}` : '';
 
-// --- STYLING & GLASSMORPHISM UTILS ---
+// "Worse than benchmark" arrow. Direction of "good" differs per metric.
+const VsBench = ({ value, bench, higherIsBetter = true, fmt }) => {
+  if (value === null || bench === null || !(bench > 0) || !isFinite(value)) return null;
+  const rel = value / bench - 1;
+  if (Math.abs(rel) < 0.05) return <span className="text-[10px] num" style={{ color: 'var(--ink-4)' }}>≈ avg</span>;
+  const good = higherIsBetter ? rel > 0 : rel < 0;
+  return (
+    <span className="text-[10px] num" style={{ color: good ? 'var(--good)' : 'var(--bad)' }}>
+      {rel > 0 ? '+' : ''}{(rel * 100).toFixed(0)}%
+    </span>
+  );
+};
 
-const GlassCard = ({ children, className = "", title, icon: Icon, action, noPadding }) => (
-  <div className={`relative overflow-hidden rounded-2xl border border-white/10 bg-[#0e0e12]/60 backdrop-blur-2xl shadow-2xl transition-all flex flex-col ${className}`}>
-    <div className="absolute inset-0 bg-gradient-to-br from-white/[0.02] to-transparent pointer-events-none" />
-    <div className="relative z-10 flex flex-col h-full w-full">
-      {(title || action) && (
-        <div className={`px-5 pt-5 pb-3 flex items-center justify-between shrink-0 ${noPadding ? '' : ''}`}>
-          <div className="flex items-center space-x-2 text-slate-400">
-            {Icon && <Icon size={16} className="text-indigo-400" />}
-            <span className="text-[10px] font-bold tracking-[0.2em] uppercase">{title}</span>
+const SortHead = ({ label, k, sort, setSort, tip, align = 'right' }) => (
+  <th className="sortable" onClick={() => setSort(s => ({ key: k, dir: s.key === k && s.dir === 'desc' ? 'asc' : 'desc' }))}
+    style={{ textAlign: align }}>
+    <Tip tip={tip}>
+      <span className={`inline-flex items-center gap-1 ${align === 'left' ? '' : 'flex-row-reverse'}`}>
+        <span className={tip ? 'help' : ''}>{label}</span>
+        <span className="flex flex-col" style={{ color: 'var(--ink-4)' }}>
+          <ChevronUp size={9} style={{ color: sort.key === k && sort.dir === 'asc' ? 'var(--accent)' : undefined }} />
+          <ChevronDown size={9} className="-mt-[3px]" style={{ color: sort.key === k && sort.dir === 'desc' ? 'var(--accent)' : undefined }} />
+        </span>
+      </span>
+    </Tip>
+  </th>
+);
+
+const useSort = (rows, initial, getters) => {
+  const [sort, setSort] = useState(initial);
+  const sorted = useMemo(() => {
+    const g = getters[sort.key] || (() => 0);
+    return [...rows].sort((a, b) => {
+      const va = g(a), vb = g(b);
+      if (typeof va === 'string' || typeof vb === 'string') {
+        return sort.dir === 'asc' ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
+      }
+      const na = va === null || va === undefined || !isFinite(va) ? -Infinity : va;
+      const nb = vb === null || vb === undefined || !isFinite(vb) ? -Infinity : vb;
+      return sort.dir === 'asc' ? na - nb : nb - na;
+    });
+  }, [rows, sort, getters]);
+  return { sorted, sort, setSort };
+};
+
+/* ===================================================================== */
+/* Persistence — exports are megabytes, so IndexedDB not localStorage     */
+/* ===================================================================== */
+
+const store = {
+  open: () => new Promise((res, rej) => {
+    try {
+      const r = indexedDB.open('metavision_db', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('files', { keyPath: 'id' });
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    } catch (e) { rej(e); }
+  }),
+  all: () => store.open().then(db => new Promise((res, rej) => {
+    const q = db.transaction('files').objectStore('files').getAll();
+    q.onsuccess = () => res(q.result || []); q.onerror = () => rej(q.error);
+  })),
+  put: (o) => store.open().then(db => new Promise((res) => {
+    const q = db.transaction('files', 'readwrite').objectStore('files').put(o);
+    q.onsuccess = () => res(); q.onerror = () => res();
+  })).catch(() => {}),
+  del: (id) => store.open().then(db => new Promise((res) => {
+    const q = db.transaction('files', 'readwrite').objectStore('files').delete(id);
+    q.onsuccess = () => res(); q.onerror = () => res();
+  })).catch(() => {}),
+};
+
+const useStored = (key, fallback) => {
+  const [v, setV] = useState(() => {
+    try { const s = localStorage.getItem(key); return s ? JSON.parse(s) : fallback; } catch { return fallback; }
+  });
+  const save = useCallback((next) => {
+    setV(next);
+    try { localStorage.setItem(key, JSON.stringify(next)); } catch {}
+  }, [key]);
+  return [v, save];
+};
+
+/* ===================================================================== */
+/* Chart tooltip                                                          */
+/* ===================================================================== */
+
+const ChartTip = ({ active, payload, label, fmt, unitFor }) => {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="card px-3 py-2.5" style={{ minWidth: 170 }}>
+      <div className="eyebrow mb-2 pb-1.5" style={{ borderBottom: '1px solid var(--edge-soft)' }}>{label}</div>
+      <div className="flex flex-col gap-1.5">
+        {payload.filter(p => p.value !== null && p.value !== undefined).map((p, i) => (
+          <div key={i} className="flex items-center justify-between gap-4 text-[12px]">
+            <span className="flex items-center gap-1.5" style={{ color: 'var(--ink-2)' }}>
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: p.color }} />
+              {p.name}
+            </span>
+            <span className="num font-semibold">{(unitFor?.(p) || ((v) => nf(v, 2)))(p.value)}</span>
           </div>
-          {action && <div>{action}</div>}
-        </div>
-      )}
-      <div className={`flex-1 flex flex-col w-full ${noPadding ? '' : (title ? 'px-5 pb-5' : 'p-5')}`}>
-        {children}
+        ))}
       </div>
     </div>
-  </div>
-);
-
-const KPICard = ({ title, value, trend, trendValue, icon: Icon }) => (
-  <GlassCard className="group hover:border-indigo-500/30 hover:bg-white/[0.04]">
-    <div className="flex items-start justify-between mb-2">
-      <div className="flex items-center space-x-2 text-slate-400">
-        <Icon size={16} className="text-indigo-400 group-hover:text-indigo-300 transition-colors" />
-        <span className="text-[10px] font-bold tracking-[0.2em] uppercase">{title}</span>
-      </div>
-      {trend && (
-        <div className={`flex items-center px-2 py-1 rounded-md text-[10px] font-bold ${trend === 'up' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
-          {trend === 'up' ? <TrendingUp size={12} className="mr-1" /> : <TrendingDown size={12} className="mr-1" />}
-          {trendValue}
-        </div>
-      )}
-    </div>
-    <div className="mt-4">
-      <div className="text-3xl font-bold text-white tracking-tight flex items-baseline gap-1">
-        {value}
-      </div>
-    </div>
-  </GlassCard>
-);
-
-// --- CANONICAL ONTOLOGY ENGINE ---
-
-const sanitizeNumber = (val) => {
-  if (!val) return 0;
-  if (typeof val === 'number') return val;
-  const cleaned = val.toString().replace(/[^0-9.-]+/g, "");
-  if (cleaned === '' || cleaned === '-' || cleaned === '.') return 0;
-  return isNaN(parseFloat(cleaned)) ? 0 : parseFloat(cleaned);
+  );
 };
 
-const isNumericString = (val) => {
-    if (val === 0 || val === '0') return true;
-    if (!val || typeof val !== 'string' || val.trim() === '') return false;
-    const cleaned = val.replace(/[\s£$€,%]/g, '');
-    if (/^-?\d+(\.\d+)?$/.test(cleaned)) return true;
-    return false;
-};
+/* ===================================================================== */
+/* INGESTION                                                              */
+/* ===================================================================== */
 
-const cleanIndicatorText = (raw) => {
-    if (!raw) return 'Unknown';
-    let c = raw.toLowerCase().replace(/actions:|offsite_conversion\.fb_pixel_|omni_/g, '').replace(/_/g, ' ');
-    if (c.includes('purchase')) return 'Purchase';
-    if (c.includes('view') || c.includes('landing page')) return 'Page View';
-    if (c.includes('lead')) return 'Lead';
-    if (c.includes('click')) return 'Click';
-    if (c.includes('install')) return 'App Install';
-    if (c.includes('message') || c.includes('messaging')) return 'Messaging';
-    if (c.includes('post engagement') || c.includes('engagement')) return 'Engagement';
-    if (c.includes('add to cart')) return 'Add To Cart';
-    if (c.includes('initiate checkout')) return 'Checkout';
-    if (c.includes('search')) return 'Search';
-    return c.charAt(0).toUpperCase() + c.slice(1).trim();
-};
-
-const CANONICAL_ONTOLOGY = [
-    { keys: ['roas', 'return on ad spend'], math: 'weighted_ratio', formula: { num: 'revenue', den: 'spend', mult: 1 }, unit: 'ratio' },
-    { keys: ['cpm', 'cost per 1,000'], math: 'weighted_ratio', formula: { num: 'spend', den: 'impressions', mult: 1000 }, unit: 'currency' },
-    { keys: ['cpc', 'cost per link click', 'cost per click'], math: 'weighted_ratio', formula: { num: 'spend', den: 'clicks', mult: 1 }, unit: 'currency' },
-    { keys: ['cost per purchase', 'cpp'], math: 'weighted_ratio', formula: { num: 'spend', den: 'purchases', mult: 1 }, unit: 'currency' },
-    { keys: ['cpa', 'cost per result', 'cost per lead', 'cost per landing page view'], math: 'weighted_ratio', formula: { num: 'spend', den: 'results', mult: 1 }, unit: 'currency' },
-    { keys: ['ctr', 'click-through rate'], math: 'weighted_ratio', formula: { num: 'clicks', den: 'impressions', mult: 100 }, unit: 'percentage' },
-    { keys: ['rate'], math: 'average', unit: 'percentage' }, 
-    { keys: ['cost per'], math: 'average', unit: 'currency' }, 
-    { keys: ['spend', 'amount spent'], math: 'sum', unit: 'currency' },
-    { keys: ['impressions'], math: 'sum', unit: 'integer' },
-    { keys: ['reach'], math: 'non_additive', unit: 'integer' },
-    { keys: ['frequency'], math: 'non_additive', unit: 'float' },
-    { keys: ['click'], math: 'sum', unit: 'integer' },
-    { keys: ['results', 'purchases', 'leads', 'installs'], math: 'sum', unit: 'integer' },
-    { keys: ['revenue', 'conversion value', 'purchase value'], math: 'sum', unit: 'currency' },
-    { keys: ['plays', 'views', 'shares', 'saves'], math: 'sum', unit: 'integer' }
+const RECIPE = [
+  ['Level', 'Export from the Ads tab, not Campaigns — ad-level data rolls up to ad set and campaign, but never the other way round.'],
+  ['Breakdown', 'By Time → Day. This is what unlocks trends, fatigue detection and period comparison.'],
+  ['Columns', 'Performance plus Amount spent, Impressions, Reach, Frequency, Link clicks, CTR, CPM, and your conversion column.'],
+  ['Attribution', 'Pick ONE window for the whole export. Mixing 7-day and 1-day makes ads incomparable.'],
+  ['Rankings', 'Add Quality / Engagement rate / Conversion rate ranking — Meta\u2019s own competitive read, free diagnosis.'],
 ];
 
-const resolveMetricDefinition = (headerLower) => {
-    for (const def of CANONICAL_ONTOLOGY) {
-        if (def.keys.some(k => headerLower.includes(k))) {
-            return { aggregation: def.math, formula: def.formula || null, unit: def.unit, isNonAdditive: def.math === 'non_additive' };
-        }
-    }
-    return { aggregation: 'sum', formula: null, unit: 'integer', isNonAdditive: false };
-};
-
-const isColumnDateOrSystem = (validRows, colIndex, headerName) => {
-    const lowerH = headerName.toLowerCase();
-    const systemKeywords = ['starts', 'ends', 'date', 'time', 'day', 'status', 'delivery', 'indicator', 'objective', 'budget', 'edit', 'created'];
-    if (systemKeywords.some(k => lowerH.includes(k))) return true;
-
-    let hasData = false;
-    let allDates = true;
-
-    for (let r=0; r < Math.min(validRows.length, 30); r++) {
-        const v = validRows[r][colIndex]?.trim();
-        if (v && v !== '-' && v !== '') {
-            hasData = true;
-            const isIso = /^\d{4}-\d{2}-\d{2}/.test(v);
-            const isUkDate = /^\d{2}\/\d{2}\/\d{4}/.test(v);
-            const isUsDate = /^\d{1,2}\/\d{1,2}\/\d{4}/.test(v);
-            const isOngoing = v.toLowerCase() === 'ongoing';
-            if (!isIso && !isUkDate && !isUsDate && !isOngoing) {
-                allDates = false;
-                break;
-            }
-        }
-    }
-    return hasData && allDates;
-};
-
-const parseMetaCSV = (csvText) => {
-  const lines = parseCSV(csvText);
-  if (lines.length < 2) throw new Error("File appears empty or invalid.");
-
-  const headers = lines[0];
-  const cleanHeaders = headers.map(h => h.trim().replace(/^\uFEFF/, '')); 
-  const lowerHeaders = cleanHeaders.map(h => h.toLowerCase());
-
-  const findCol = (aliases, excludes = []) => {
-      for (const alias of aliases) {
-          const idx = lowerHeaders.findIndex(h => h === alias);
-          if (idx !== -1) return idx;
-      }
-      for (const alias of aliases) {
-          const idx = lowerHeaders.findIndex(h => h.includes(alias) && !excludes.some(ex => h.includes(ex)));
-          if (idx !== -1) return idx;
-      }
-      return -1;
-  };
-
-  const map = {
-    date: findCol(['reporting starts', 'day', 'date']),
-    dateEnd: findCol(['reporting ends', 'ends']),
-    identifier: findCol(['ad name', 'ad set name', 'campaign name', 'ad', 'ad set', 'campaign']),
-    spend: findCol(['amount spent', 'spend']),
-    results: findCol(['results'], ['cost', 'rate', 'indicator']),
-    purchases: findCol(['website purchases', 'purchases'], ['cost', 'value', 'roas', 'rate']),
-    revenue: findCol(['conversion value', 'revenue', 'purchase roas', 'roas'], ['cost', 'rate']),
-    impressions: findCol(['impressions'], ['cpm', 'cost', 'rate']),
-    clicks: findCol(['link clicks', 'clicks'], ['cpc', 'cost', 'rate', 'ctr']),
-    resultIndicator: findCol(['result indicator', 'optimization goal', 'objective']),
-    delivery: findCol(['delivery', 'status'])
-  };
-
-  if (map.spend === -1) throw new Error("Could not detect an 'Amount spent' column. Please check your Meta export.");
-
-  const validRows = [];
-  for (let r = 1; r < lines.length; r++) {
-      const cols = lines[r];
-      if (cols.length < 3) continue; 
-      
-      const idVal = map.identifier !== -1 ? cols[map.identifier] : cols[0];
-      if (!idVal || String(idVal).trim() === '' || /^(total|summary|all)/i.test(String(idVal).trim())) {
-          continue; 
-      }
-      validRows.push(cols);
-  }
-
-  if (validRows.length === 0) throw new Error("No valid data rows found. Ensure the export is not just a summary.");
-
-  const metricDefs = {};
-  const dimensionDefs = {};
-
-  cleanHeaders.forEach((h, i) => {
-     if (isColumnDateOrSystem(validRows, i, h)) return; 
-
-     let isNum = true;
-     let hasData = false;
-     
-     for(let r = 0; r < Math.min(validRows.length, 30); r++) {
-         const val = validRows[r][i];
-         if (val && val.trim() !== '') {
-             hasData = true;
-             if (!isNumericString(val)) {
-                 isNum = false;
-                 break;
-             }
-         }
-     }
-     
-     if (hasData) {
-         if (isNum) {
-             const def = resolveMetricDefinition(lowerHeaders[i]);
-             metricDefs[h] = {
-                 id: h, label: h, ...def,
-                 compatibleDimensions: def.isNonAdditive ? ['campaign', 'adset', 'ad'] : 'all'
-             };
-         } else {
-             dimensionDefs[h] = { id: h, label: h };
-         }
-     }
-  });
-
-  if (Object.keys(dimensionDefs).length === 0) {
-      dimensionDefs[cleanHeaders[0]] = { id: cleanHeaders[0], label: cleanHeaders[0] };
-  }
-
-  const parsedData = [];
-  let minStart = '9999-12-31';
-  let maxEnd = '0000-01-01';
-
-  for (const cols of validRows) {
-    const primaryName = map.identifier !== -1 ? cols[map.identifier] : cols[0] || 'Unknown';
-    
-    let dateRaw = map.date !== -1 ? cols[map.date] : 'Unknown';
-    let dateEndRaw = map.dateEnd !== -1 ? cols[map.dateEnd] : dateRaw;
-    
-    const normalizeDate = (d) => {
-        if (!d || String(d).toLowerCase() === 'ongoing') return null;
-        if (/^\d{4}-\d{2}-\d{2}/.test(d)) return d.substring(0, 10);
-        if (/^\d{2}\/\d{2}\/\d{4}/.test(d)) {
-            const parts = d.split('/');
-            return `${parts[2]}-${parts[1]}-${parts[0]}`; 
-        }
-        if (/^\d{1,2}\/\d{1,2}\/\d{4}/.test(d)) {
-            const parts = d.split('/');
-            return `${parts[2]}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}`; 
-        }
-        return null;
-    };
-
-    const dStart = normalizeDate(dateRaw);
-    const dEnd = normalizeDate(dateEndRaw) || dStart;
-
-    if (dStart && dStart < minStart) minStart = dStart;
-    if (dEnd && dEnd > maxEnd) maxEnd = dEnd;
-
-    const timelineDateKey = dStart || 'Unknown';
-
-    const cleanIndicator = cleanIndicatorText(map.resultIndicator !== -1 ? cols[map.resultIndicator] : '');
-    const deliveryStatus = map.delivery !== -1 && cols[map.delivery] ? String(cols[map.delivery]).toLowerCase() : '';
-
-    const spend = sanitizeNumber(cols[map.spend]);
-    const results = map.results !== -1 ? sanitizeNumber(cols[map.results]) : 0;
-    
-    let purchases = map.purchases !== -1 ? sanitizeNumber(cols[map.purchases]) : 0;
-    if (cleanIndicator === 'Purchase' && results > 0) purchases = Math.max(purchases, results); 
-    
-    const isPurchaseGoal = cleanIndicator === 'Purchase' || purchases > 0;
-    const purchaseCampSpend = isPurchaseGoal ? spend : 0;
-
-    const clicks = map.clicks !== -1 ? sanitizeNumber(cols[map.clicks]) : 0;
-    const impressions = map.impressions !== -1 ? sanitizeNumber(cols[map.impressions]) : 0;
-    
-    let revenue = 0;
-    if (map.revenue !== -1) {
-        const revRaw = sanitizeNumber(cols[map.revenue]);
-        const isROASColumn = lowerHeaders[map.revenue].includes('roas') && !lowerHeaders[map.revenue].includes('value');
-        revenue = isROASColumn ? (revRaw * spend) : revRaw;
-    }
-
-    const rowMetrics = {};
-    const rowDimensions = {};
-    
-    cleanHeaders.forEach((h, idx) => {
-        let v = cols[idx] || '';
-        if (metricDefs[h]) {
-            let numV = sanitizeNumber(v);
-            if (metricDefs[h].rawMultiplier) numV = numV * metricDefs[h].rawMultiplier;
-            rowMetrics[h] = numV;
-        } else if (dimensionDefs[h]) {
-            rowDimensions[h] = v;
-        }
-    });
-
-    parsedData.push({
-      dateRaw: timelineDateKey,
-      campaign: primaryName,
-      spend, results, purchases, purchaseCampSpend, revenue, clicks, impressions,
-      resultIndicator: cleanIndicator,
-      deliveryStatus,
-      metrics: rowMetrics,
-      dimensions: rowDimensions
-    });
-  }
-
-  return {
-      rows: parsedData,
-      timeFrame: { 
-          start: minStart !== '9999-12-31' ? formatToUKDate(minStart) : 'Unknown', 
-          end: maxEnd !== '0000-01-01' ? formatToUKDate(maxEnd) : 'Unknown',
-          startRaw: minStart !== '9999-12-31' ? minStart : '',
-          endRaw: maxEnd !== '0000-01-01' ? maxEnd : ''
-      },
-      metricDefs,
-      dimensionDefs
-  };
-};
-
-// --- CORE DASHBOARD COMPONENT (OVERVIEW) ---
-
-const MetaDashboard = ({ data }) => {
-  const [sortConfig, setSortConfig] = useState({ key: 'spend', direction: 'desc' });
-  const [granularity, setGranularity] = useState('daily');
-
-  const { timeline, campaigns, kpis, insights } = useMemo(() => {
-    if (!data.rows || data.rows.length === 0) return { timeline:[], campaigns:[], kpis:{}, insights:[] };
-
-    const granularMap = {};
-    const campMap = {};
-    let totalSpend = 0, totalResults = 0, totalPurchases = 0, totalPurchaseCampSpend = 0;
-
-    data.rows.forEach(row => {
-        const isPurchaseGoal = row.resultIndicator === 'Purchase' || row.purchases > 0;
-
-        if (row.dateRaw !== 'Unknown') {
-            const granularDateRaw = getGranularDate(row.dateRaw, granularity);
-            let formatDisplay = formatToUKDate(granularDateRaw);
-
-            if (granularity === 'monthly') {
-                const d = new Date(granularDateRaw);
-                if (!isNaN(d)) formatDisplay = d.toLocaleString('en-GB', { month: 'short', year: 'numeric' });
-            } else if (granularity === 'weekly') {
-                const d = new Date(granularDateRaw);
-                if (!isNaN(d)) formatDisplay = `Wk of ${d.getDate()} ${d.toLocaleString('en-GB', { month: 'short' })}`;
-            }
-
-            if (!granularMap[granularDateRaw]) granularMap[granularDateRaw] = { date: granularDateRaw, dateFormatted: formatDisplay, spend: 0, purchases: 0, purchaseCampSpend: 0 };
-            granularMap[granularDateRaw].spend += row.spend;
-            granularMap[granularDateRaw].purchases += row.purchases;
-            if (isPurchaseGoal) granularMap[granularDateRaw].purchaseCampSpend += row.spend;
-        }
-
-        if (!campMap[row.campaign]) {
-            campMap[row.campaign] = { 
-                name: row.campaign, spend: 0, revenue: 0, results: 0, purchases: 0, impressions: 0, clicks: 0, 
-                indicators: new Set(), deliveryStatus: row.deliveryStatus 
-            };
-        }
-        const camp = campMap[row.campaign];
-        camp.spend += row.spend;
-        camp.revenue += row.revenue;
-        camp.results += row.results;
-        camp.purchases += row.purchases;
-        camp.impressions += row.impressions;
-        camp.clicks += row.clicks;
-        
-        if (row.deliveryStatus && row.deliveryStatus !== '') camp.deliveryStatus = row.deliveryStatus;
-        if (row.resultIndicator) camp.indicators.add(row.resultIndicator);
-
-        totalSpend += row.spend;
-        totalResults += row.results;
-        totalPurchases += row.purchases;
-        if (isPurchaseGoal) totalPurchaseCampSpend += row.spend;
-    });
-
-    const timelineArr = Object.values(granularMap).sort((a,b) => a.date.localeCompare(b.date)).map(d => ({
-        ...d,
-        cpa: d.purchases > 0 ? (d.purchaseCampSpend / d.purchases) : 0
-    }));
-
-    let campArr = Object.values(campMap).map(c => {
-        const inds = Array.from(c.indicators).filter(Boolean);
-        return {
-            ...c,
-            primaryIndicator: inds.length > 0 ? inds[0] : 'Unknown',
-            hasMixedIndicators: inds.length > 1,
-            roas: c.spend > 0 ? (c.revenue / c.spend) : 0,
-            purchaseCpa: c.purchases > 0 ? (c.spend / c.purchases) : 0,
-            ctr: c.impressions > 0 ? ((c.clicks / c.impressions) * 100) : 0
-        };
-    });
-
-    campArr.sort((a, b) => {
-        let aVal = a[sortConfig.key];
-        let bVal = b[sortConfig.key];
-        if (sortConfig.key === 'name' || sortConfig.key === 'primaryIndicator') {
-            return sortConfig.direction === 'asc' ? String(aVal).localeCompare(String(bVal)) : String(bVal).localeCompare(String(aVal));
-        }
-        return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
-    });
-
-    const generatedInsights = [];
-    
-    // 1. Highest Spender
-    const topSpender = [...campArr].sort((a, b) => b.spend - a.spend)[0];
-    if (topSpender && topSpender.spend > 0) {
-        generatedInsights.push({ 
-            type: 'warning', 
-            text: `Highest Spender: "${topSpender.name}" consumed the most budget (${formatValue(topSpender.spend, 'currency')}). Monitor closely to ensure it maintains a profitable return on ad spend.` 
-        });
-    }
-
-    // 2. Most Volume
-    const topVolume = [...campArr].sort((a, b) => b.results - a.results)[0];
-    if (topVolume && topVolume.results > 0) {
-        generatedInsights.push({ 
-            type: 'success', 
-            text: `Volume Leader: "${topVolume.name}" is driving the highest conversion volume (${formatValue(topVolume.results, 'integer')} results). Consider scaling this entity.` 
-        });
-    }
-
-    // 3. Lowest CPA
-    // Use entities with at least a few results to filter out single-click anomalies
-    const cpaEligible = campArr.filter(c => c.purchases > 2 || c.results > 2);
-    const fallbackEligible = campArr.filter(c => c.purchases > 0 || c.results > 0);
-    const targetArray = cpaEligible.length > 0 ? cpaEligible : fallbackEligible;
-
-    if (targetArray.length > 0) {
-        const bestCpa = targetArray.sort((a, b) => {
-            const cpaA = a.purchases > 0 ? a.purchaseCpa : (a.spend / a.results);
-            const cpaB = b.purchases > 0 ? b.purchaseCpa : (b.spend / b.results);
-            return cpaA - cpaB;
-        })[0];
-        
-        const cpaVal = bestCpa.purchases > 0 ? bestCpa.purchaseCpa : (bestCpa.spend / bestCpa.results);
-        generatedInsights.push({ 
-            type: 'success', 
-            text: `Efficiency Winner: "${bestCpa.name}" has the lowest CPA (${formatValue(cpaVal, 'currency')}). Shift budget from underperforming entities here to maximize your ROI.` 
-        });
-    }
-
-    return {
-        timeline: timelineArr,
-        campaigns: campArr,
-        kpis: { spend: totalSpend, results: totalResults, purchaseCpa: totalPurchases > 0 ? (totalPurchaseCampSpend / totalPurchases) : 0 },
-        insights: generatedInsights
-    };
-  }, [data, sortConfig, granularity]);
-
-  const handleSort = (key) => {
-      let direction = 'desc';
-      if (sortConfig.key === key && sortConfig.direction === 'desc') direction = 'asc';
-      setSortConfig({ key, direction });
-  };
-
-  const TableHeader = ({ label, sortKey }) => (
-      <th className="pb-4 font-bold cursor-pointer hover:text-white transition-colors select-none" onClick={() => handleSort(sortKey)}>
-          <div className={`flex items-center gap-1.5 ${sortKey !== 'name' && sortKey !== 'primaryIndicator' ? 'justify-end' : ''}`}>
-              {label}
-              <div className="flex flex-col text-slate-600">
-                  <ChevronUp size={10} className={sortConfig.key === sortKey && sortConfig.direction === 'asc' ? 'text-indigo-400' : ''} />
-                  <ChevronDown size={10} className={`-mt-1 ${sortConfig.key === sortKey && sortConfig.direction === 'desc' ? 'text-indigo-400' : ''}`} />
-              </div>
-          </div>
-      </th>
-  );
-
-  const CustomChartTooltip = ({ active, payload, label }) => {
-    if (active && payload && payload.length) {
-      return (
-        <div className="bg-[#0e0e12]/95 border border-white/10 p-4 rounded-xl shadow-2xl backdrop-blur-xl z-50 min-w-[200px]">
-          <p className="text-slate-400 font-bold mb-3 pb-2 border-b border-white/5 text-[10px] uppercase tracking-widest">{label}</p>
-          <div className="flex flex-col gap-2">
-            {payload.map((entry, index) => {
-               const unit = entry.name.toLowerCase().includes('cpa') || entry.name.toLowerCase().includes('spend') ? 'currency' : 'integer';
-               return (
-                  <div key={index} className="flex items-center justify-between text-sm gap-4">
-                    <div className="flex items-center gap-2">
-                        <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: entry.color }}></div>
-                        <span className="text-slate-300 capitalize">{entry.name}</span>
-                    </div>
-                    <span className="text-white font-mono font-bold">
-                        {formatValue(entry.value, unit)}
-                    </span>
-                  </div>
-               );
-            })}
-          </div>
-        </div>
-      );
-    }
-    return null;
-  };
-
-  const GranularityToggle = () => (
-      <div className="flex bg-[#0e0e12] rounded-lg border border-white/10 overflow-hidden p-0.5">
-           <button onClick={() => setGranularity('daily')} className={`px-3 py-1 text-[10px] uppercase tracking-widest font-bold rounded-md transition-colors ${granularity === 'daily' ? 'bg-indigo-500/20 text-indigo-300' : 'text-slate-500 hover:text-white'}`}>Daily</button>
-           <button onClick={() => setGranularity('weekly')} className={`px-3 py-1 text-[10px] uppercase tracking-widest font-bold rounded-md transition-colors ${granularity === 'weekly' ? 'bg-indigo-500/20 text-indigo-300' : 'text-slate-500 hover:text-white'}`}>Weekly</button>
-           <button onClick={() => setGranularity('monthly')} className={`px-3 py-1 text-[10px] uppercase tracking-widest font-bold rounded-md transition-colors ${granularity === 'monthly' ? 'bg-indigo-500/20 text-indigo-300' : 'text-slate-500 hover:text-white'}`}>Monthly</button>
-      </div>
-  );
-
-  return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <KPICard title="Total Spend" value={formatValue(kpis.spend, 'currency')} icon={DollarSign} />
-            <KPICard title="Total Results" value={formatValue(kpis.results, 'integer')} icon={Target} />
-            <KPICard title="Blended Purchase CPA" value={formatValue(kpis.purchaseCpa, 'currency')} icon={MousePointerClick} />
-        </div>
-
-        <GlassCard className="w-full" title="Core Performance Timeline" icon={BarChart2} action={<GranularityToggle />}>
-            <div style={{ height: '400px', width: '100%' }}>
-                <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={timeline} margin={{ top: 10, right: 0, left: -20, bottom: 65 }}>
-                        <defs>
-                            <linearGradient id="colorSpend" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="#818cf8" stopOpacity={0.3}/>
-                                <stop offset="95%" stopColor="#818cf8" stopOpacity={0}/>
-                            </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.03)" vertical={false} />
-                        <XAxis dataKey="dateFormatted" stroke="#475569" tick={{fill: '#64748b', fontSize: 10}} axisLine={false} tickLine={false} minTickGap={20} angle={-35} textAnchor="end" height={60} />
-                        <YAxis yAxisId="left" stroke="#818cf8" tick={{fill: '#64748b', fontSize: 10}} axisLine={false} tickLine={false} tickFormatter={(v) => formatYAxisTick(v, 'currency')} />
-                        <YAxis yAxisId="right" orientation="right" stroke="#2dd4bf" tick={{fill: '#64748b', fontSize: 10}} axisLine={false} tickLine={false} tickFormatter={(v) => formatYAxisTick(v, 'currency')} />
-                        <RechartsTooltip content={<CustomChartTooltip />} cursor={{fill: 'rgba(255,255,255,0.02)'}} />
-                        <Legend wrapperStyle={{fontSize: '11px', paddingTop: '10px'}} iconType="circle" verticalAlign="top" />
-                        
-                        <Area yAxisId="left" type="monotone" dataKey="spend" name="Spend" stroke="#818cf8" strokeWidth={2} fill="url(#colorSpend)" dot={timeline.length === 1 ? { r: 5, fill: '#818cf8', strokeWidth: 0 } : false} />
-                        <Line yAxisId="right" type="monotone" dataKey="cpa" name="Purchase CPA" stroke="#2dd4bf" strokeWidth={3} dot={timeline.length === 1 ? { r: 5, fill: '#2dd4bf', strokeWidth: 0 } : false} activeDot={{r: 5, fill: '#2dd4bf', stroke: '#0e0e12', strokeWidth: 2}} />
-                    </ComposedChart>
-                </ResponsiveContainer>
-            </div>
-        </GlassCard>
-
-        <GlassCard className="w-full" title="Engine Insights" icon={Sparkles}>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-2">
-                {insights.map((insight, idx) => (
-                    <div key={idx} className="p-4 rounded-xl bg-white/[0.03] border border-white/5 flex gap-3 group hover:bg-white/[0.05] transition-colors">
-                        <div className="pt-0.5 shrink-0">
-                            {insight.type === 'warning' && <AlertCircle size={16} className="text-amber-400" />}
-                            {insight.type === 'success' && <TrendingUp size={16} className="text-emerald-400" />}
-                            {insight.type === 'alert' && <AlertCircle size={16} className="text-rose-400" />}
-                        </div>
-                        <p className="text-sm text-slate-300 leading-relaxed font-medium">
-                            {insight.text}
-                        </p>
-                    </div>
-                ))}
-                {insights.length === 0 && (
-                    <div className="col-span-3 flex flex-col items-center justify-center text-slate-500 opacity-50 py-8">
-                        <CheckCircle size={32} className="mb-2" />
-                        <span className="text-sm">Metrics are stable.</span>
-                    </div>
-                )}
-            </div>
-        </GlassCard>
-
-        <GlassCard title="Segment Explorer" icon={ListOrdered}>
-            <div className="overflow-x-auto -mx-5 px-5">
-                <table className="w-full text-left border-collapse min-w-[800px]">
-                    <thead>
-                        <tr className="border-b border-white/10 text-[10px] uppercase tracking-widest text-slate-500">
-                            <TableHeader label="Identifier Name" sortKey="name" />
-                            <TableHeader label="Goal" sortKey="primaryIndicator" />
-                            <TableHeader label="Spend" sortKey="spend" />
-                            <TableHeader label="Results" sortKey="results" />
-                            <TableHeader label="Purchases" sortKey="purchases" />
-                            <TableHeader label="Pur. CPA" sortKey="purchaseCpa" />
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-white/[0.05]">
-                        {campaigns.map((camp, i) => (
-                            <tr key={i} className="group hover:bg-white/[0.02] transition-colors">
-                                <td className="py-4 text-sm font-medium text-slate-200">
-                                    <div className="flex items-center gap-3">
-                                        <div className="w-1.5 h-1.5 rounded-full bg-indigo-500/50 group-hover:bg-indigo-400 transition-colors shrink-0"></div>
-                                        <div className="flex flex-col md:flex-row md:items-center gap-2">
-                                            <span className="truncate max-w-[280px] block" title={camp.name}>{camp.name}</span>
-                                            {camp.deliveryStatus && (
-                                                <span className={`text-[9px] px-1.5 py-0.5 rounded uppercase tracking-wider shrink-0 w-max ${camp.deliveryStatus.includes('active') && !camp.deliveryStatus.includes('inactive') ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-500/20 text-slate-400'}`}>
-                                                    {camp.deliveryStatus.replace(/_/g, ' ')}
-                                                </span>
-                                            )}
-                                        </div>
-                                    </div>
-                                </td>
-                                
-                                <td className="py-4 text-sm text-left">
-                                    <div className="flex flex-col gap-1">
-                                        <span className={`inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded tracking-widest uppercase w-max ${camp.primaryIndicator === 'Purchase' ? 'bg-indigo-500/10 border border-indigo-500/20 text-indigo-300' : 'bg-amber-500/10 border border-amber-500/20 text-amber-300'}`}>
-                                            {camp.primaryIndicator === 'Purchase' ? <Target size={10} /> : <Info size={10} />}
-                                            {camp.primaryIndicator}
-                                        </span>
-                                        {camp.hasMixedIndicators && (
-                                             <span className="text-[9px] bg-slate-500/10 border border-slate-500/20 text-slate-400 px-1.5 py-0.5 rounded tracking-widest uppercase w-max" title="Multiple conversion types detected">
-                                                Mixed Goals
-                                             </span>
-                                        )}
-                                    </div>
-                                </td>
-
-                                <td className="py-4 text-sm text-right font-mono text-slate-300">{formatValue(camp.spend, 'currency')}</td>
-                                <td className="py-4 text-sm text-right font-mono text-slate-400">{formatValue(camp.results, 'integer')}</td>
-                                <td className="py-4 text-sm text-right font-mono text-white font-bold">{formatValue(camp.purchases, 'integer')}</td>
-                                <td className="py-4 text-sm text-right font-mono text-slate-300">{formatValue(camp.purchaseCpa, 'currency')}</td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-        </GlassCard>
+const ParseReport = ({ ds, fmt }) => {
+  const [open, setOpen] = useState(false);
+  const d = ds.detected;
+  const Row = ({ k, v }) => v ? (
+    <div className="flex items-baseline justify-between gap-4 py-1">
+      <span className="text-[11px]" style={{ color: 'var(--ink-4)' }}>{k}</span>
+      <span className="text-[11px] num text-right" style={{ color: 'var(--ink-2)' }}>{v}</span>
     </div>
-  );
-};
-
-// --- COMPATIBILITY GATEKEEPER HOOK ---
-const useExplorerOptions = (metricDefs, dimensionDefs) => {
-    const dimKeys = useMemo(() => Object.keys(dimensionDefs).sort(), [dimensionDefs]);
-    const metKeys = useMemo(() => Object.keys(metricDefs).sort(), [metricDefs]);
-    
-    const [selectedDim, setSelectedDim] = useState('');
-    const [selectedMetric, setSelectedMetric] = useState('');
-
-    const availableMetrics = useMemo(() => {
-        if (!selectedDim) return metKeys;
-        const isDemographic = selectedDim.toLowerCase().includes('age') || selectedDim.toLowerCase().includes('gender') || selectedDim.toLowerCase().includes('country');
-        
-        return metKeys.filter(mKey => {
-            const mDef = metricDefs[mKey];
-            if (!mDef) return false;
-            if (mDef.compatibleDimensions === 'all') return true;
-            if (mDef.isNonAdditive && isDemographic) return false;
-            return true;
-        });
-    }, [selectedDim, metricDefs, metKeys]);
-
-    useEffect(() => {
-        if (dimKeys.length > 0 && (!selectedDim || !dimKeys.includes(selectedDim))) setSelectedDim(dimKeys[0]);
-    }, [dimKeys, selectedDim]);
-
-    useEffect(() => {
-        if (availableMetrics.length > 0 && (!selectedMetric || !availableMetrics.includes(selectedMetric))) setSelectedMetric(availableMetrics[0]);
-    }, [availableMetrics, selectedMetric]);
-
-    const handleDimChange = (newDim) => setSelectedDim(newDim);
-
-    return { selectedDim, handleDimChange, selectedMetric, setSelectedMetric, availableMetrics, dimKeys };
-};
-
-// --- DEEP DIVE DASHBOARD COMPONENT ---
-
-const DeepDiveDashboard = ({ data }) => {
-  const { selectedDim, handleDimChange, selectedMetric, setSelectedMetric, availableMetrics, dimKeys } = useExplorerOptions(data.metricDefs, data.dimensionDefs);
-  const [viewMode, setViewMode] = useState('explorer'); 
-  const [chartType, setChartType] = useState('line'); 
-  
-  // Date and Granularity Controls
-  const [dateRange, setDateRange] = useState({ start: data.timeFrame.startRaw, end: data.timeFrame.endRaw });
-  const [granularity, setGranularity] = useState('daily');
-
-  useEffect(() => {
-      setDateRange({ start: data.timeFrame.startRaw, end: data.timeFrame.endRaw });
-  }, [data.timeFrame.startRaw, data.timeFrame.endRaw]);
-  
-  const availableItemsForDim = useMemo(() => {
-      if (!selectedDim) return [];
-      const items = new Set();
-      data.rows.forEach(r => {
-          const val = r.dimensions[selectedDim];
-          if (val !== undefined && val !== null && String(val).trim() !== '') items.add(String(val).trim());
-      });
-      return Array.from(items).sort();
-  }, [data.rows, selectedDim]);
-
-  const [compareEntities, setCompareEntities] = useState(['', '', '']);
-  const [compareMetrics, setCompareMetrics] = useState(['', '', '']);
-
-  useEffect(() => {
-      if (availableItemsForDim.length > 0) {
-          setCompareEntities([
-              availableItemsForDim[0], 
-              availableItemsForDim.length > 1 ? availableItemsForDim[1] : '',
-              availableItemsForDim.length > 2 ? availableItemsForDim[2] : ''
-          ]);
-      } else {
-          setCompareEntities(['', '', '']);
-      }
-  }, [availableItemsForDim]);
-
-  useEffect(() => {
-      if (availableMetrics.length > 0) {
-          setCompareMetrics([
-              availableMetrics[0],
-              availableMetrics.length > 1 ? availableMetrics[1] : '',
-              availableMetrics.length > 2 ? availableMetrics[2] : ''
-          ]);
-      } else {
-          setCompareMetrics(['', '', '']);
-      }
-  }, [availableMetrics]);
-
-  const updateCompareEntity = (idx, value) => {
-      const updated = [...compareEntities];
-      updated[idx] = value;
-      setCompareEntities(updated);
-  };
-
-  const updateCompareMetric = (idx, value) => {
-      const updated = [...compareMetrics];
-      updated[idx] = value;
-      setCompareMetrics(updated);
-  };
-
-  const activeMetricDef = data.metricDefs[selectedMetric] || { unit: 'integer', aggregation: 'SUM' };
-
-  const breakdownData = useMemo(() => {
-      if (viewMode !== 'explorer' || !selectedDim) return [];
-      const dimMap = {};
-
-      data.rows.forEach(row => {
-          if (row.dateRaw !== 'Unknown') {
-              if (dateRange.start && row.dateRaw < dateRange.start) return;
-              if (dateRange.end && row.dateRaw > dateRange.end) return;
-          }
-
-          const key = String(row.dimensions[selectedDim] || 'Unknown/Blank').trim();
-          if (!dimMap[key]) {
-              dimMap[key] = { name: key, rawValue: 0, spend: 0, clicks: 0, impressions: 0, revenue: 0, results: 0, purchases: 0, purchaseCampSpend: 0, rowCount: 0 };
-          }
-          
-          dimMap[key].rawValue += row.metrics[selectedMetric] || 0;
-          dimMap[key].spend += row.spend || 0;
-          dimMap[key].clicks += row.clicks || 0;
-          dimMap[key].impressions += row.impressions || 0;
-          dimMap[key].revenue += row.revenue || 0;
-          dimMap[key].results += row.results || 0;
-          dimMap[key].purchases += row.purchases || 0;
-          dimMap[key].purchaseCampSpend += row.purchaseCampSpend || 0;
-          dimMap[key].rowCount += 1;
-      });
-
-      return Object.values(dimMap).map(d => {
-          let finalValue = d.rawValue;
-          let isInvalidNonAdditive = false;
-
-          if (activeMetricDef.aggregation === 'WEIGHTED_RATIO' && activeMetricDef.formula) {
-              const { num, den, mult = 1 } = activeMetricDef.formula;
-              const nVal = d[num];
-              const dVal = d[den];
-              finalValue = (dVal && dVal > 0) ? (nVal / dVal) * mult : 0;
-          } else if (activeMetricDef.aggregation === 'AVERAGE') {
-              finalValue = d.rowCount > 0 ? (d.rawValue / d.rowCount) : 0;
-          } else if (activeMetricDef.aggregation === 'NON_ADDITIVE' && d.rowCount > 1) {
-              isInvalidNonAdditive = true;
-              finalValue = 0; 
-          }
-
-          return { name: d.name, value: finalValue, isInvalidNonAdditive };
-      }).sort((a,b) => b.value - a.value).slice(0, 15);
-  }, [data.rows, selectedDim, selectedMetric, viewMode, activeMetricDef, dateRange]);
-
-  const activeCompareEntities = compareEntities.filter(Boolean);
-  const activeCompareMetrics = compareMetrics.filter(Boolean);
-
-  const compareTimelineData = useMemo(() => {
-      if (viewMode !== 'compare' || !selectedDim) return [];
-      const dateMap = {};
-
-      data.rows.forEach(row => {
-          if (row.dateRaw === 'Unknown') return;
-          if (dateRange.start && row.dateRaw < dateRange.start) return;
-          if (dateRange.end && row.dateRaw > dateRange.end) return;
-
-          const key = String(row.dimensions[selectedDim] || '').trim();
-          if (!activeCompareEntities.includes(key)) return;
-          
-          const granularDateRaw = getGranularDate(row.dateRaw, granularity);
-          let formatDisplay = formatToUKDate(granularDateRaw);
-          
-          if (granularity === 'monthly') {
-              const d = new Date(granularDateRaw);
-              if (!isNaN(d)) formatDisplay = d.toLocaleString('en-GB', { month: 'short', year: 'numeric' });
-          } else if (granularity === 'weekly') {
-              const d = new Date(granularDateRaw);
-              if (!isNaN(d)) formatDisplay = `Wk of ${d.getDate()} ${d.toLocaleString('en-GB', { month: 'short' })}`;
-          }
-          
-          const dateKey = granularDateRaw;
-
-          if (!dateMap[dateKey]) {
-              dateMap[dateKey] = { dateRaw: dateKey, dateFormatted: formatDisplay };
-              activeCompareEntities.forEach(ent => {
-                 dateMap[dateKey][ent] = { rowCount: 0, rawValues: {}, spend: 0, clicks: 0, impressions: 0, revenue: 0, results: 0, purchases: 0, purchaseCampSpend: 0 };
-              });
-          }
-
-          const entData = dateMap[dateKey][key];
-          entData.rowCount += 1;
-          entData.spend += row.spend || 0;
-          entData.clicks += row.clicks || 0;
-          entData.impressions += row.impressions || 0;
-          entData.revenue += row.revenue || 0;
-          entData.results += row.results || 0;
-          entData.purchases += row.purchases || 0;
-          entData.purchaseCampSpend += row.purchaseCampSpend || 0;
-
-          activeCompareMetrics.forEach(mKey => {
-              if (!entData.rawValues[mKey]) entData.rawValues[mKey] = 0;
-              entData.rawValues[mKey] += row.metrics[mKey] || 0;
-          });
-      });
-
-      return Object.values(dateMap).sort((a,b) => a.dateRaw.localeCompare(b.dateRaw)).map(d => {
-          const out = { dateFormatted: d.dateFormatted };
-
-          activeCompareEntities.forEach(ent => {
-              const entData = d[ent];
-              activeCompareMetrics.forEach(mKey => {
-                  const mDef = data.metricDefs[mKey] || { aggregation: 'SUM' };
-                  let val = entData ? (entData.rawValues[mKey] || 0) : 0;
-                  let invalid = false;
-
-                  if (entData) {
-                      if (mDef.aggregation === 'WEIGHTED_RATIO' && mDef.formula) {
-                          const { num, den, mult = 1 } = mDef.formula;
-                          const nVal = entData[num];
-                          const dVal = entData[den];
-                          val = (dVal && dVal > 0) ? (nVal / dVal) * mult : 0;
-                      } else if (mDef.aggregation === 'AVERAGE') {
-                          val = entData.rowCount > 0 ? (entData.rawValues[mKey] / entData.rowCount) : 0;
-                      } else if (mDef.aggregation === 'NON_ADDITIVE' && entData.rowCount > 1) {
-                          val = 0;
-                          invalid = true;
-                      }
-                  }
-
-                  out[`${ent}|${mKey}`] = val;
-                  out[`${ent}|${mKey}_invalid`] = invalid;
-              });
-          });
-          return out;
-      });
-  }, [data.rows, selectedDim, viewMode, activeCompareEntities, activeCompareMetrics, data.metricDefs, dateRange, granularity]);
-
-  const BreakdownTooltip = ({ active, payload, label }) => {
-    if (active && payload && payload.length) {
-      const point = payload[0].payload;
-      return (
-        <div className="bg-[#0e0e12]/95 border border-white/10 p-4 rounded-xl shadow-2xl backdrop-blur-xl z-50 min-w-[200px]">
-          <p className="text-slate-400 font-bold mb-3 pb-2 border-b border-white/5 text-[10px] uppercase tracking-widest">
-            {selectedDim}: <span className="text-white normal-case text-sm ml-1">{label}</span>
-          </p>
-          <div className="flex items-center justify-between text-sm gap-6 mt-1">
-            <div className="flex items-center gap-2">
-                <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: payload[0].color }}></div>
-                <span className="text-slate-300 capitalize">{selectedMetric}</span>
-            </div>
-            {point.isInvalidNonAdditive ? (
-                <span className="text-amber-400 font-mono font-bold flex items-center gap-1">
-                    <AlertCircle size={12}/> N/A (Non-Additive)
-                </span>
-            ) : (
-                <span className="text-white font-mono font-bold">
-                    {formatValue(point.value, activeMetricDef.unit)}
-                </span>
+  ) : null;
+  return (
+    <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--edge-soft)' }}>
+      <button className="btn px-2.5 py-1 text-[11px] font-semibold inline-flex items-center gap-1.5" onClick={() => setOpen(o => !o)}>
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />} What the parser found
+      </button>
+      {open && (
+        <div className="mt-3 grid md:grid-cols-2 gap-x-8">
+          <div>
+            <div className="eyebrow mb-1.5">Structure</div>
+            <Row k="Levels" v={ds.levelsPresent.map(l => d.entity[l]).join(' → ')} />
+            <Row k="Time" v={ds.timeGrain === 'lifetime' ? 'Lifetime totals (no time column)' : `${d.date} · ${ds.timeGrain}`} />
+            <Row k="Date order" v={ds.dateOrder === 'mdy' ? 'Month-first (US)' : 'Day-first (UK/EU)'} />
+            <Row k="Numbers" v={ds.numberLocale === 'eu' ? 'Decimal comma (EU)' : 'Decimal point'} />
+            <Row k="Currency" v={ds.currency} />
+            <Row k="Breakdowns" v={ds.breakdowns.join(', ') || 'none'} />
+            <Row k="Rows kept" v={`${nf(ds.rowCount)} (${ds.skipped.blank + ds.skipped.total} skipped)`} />
+            <Row k="Goals" v={ds.indicators.join(', ') || 'not stated'} />
+            <Row k="Attribution" v={ds.attributions.join(' · ') || 'not stated'} />
+          </div>
+          <div>
+            <div className="eyebrow mb-1.5">Columns mapped</div>
+            {Object.entries(d.roles).map(([role, header]) => <Row key={role} k={role} v={header} />)}
+            {Object.entries(d.ranks).map(([role, header]) => <Row key={role} k={role} v={header} />)}
+            {!!d.ignored.length && (
+              <div className="mt-2 text-[10px]" style={{ color: 'var(--ink-4)' }}>
+                Not used: {d.ignored.slice(0, 12).join(', ')}{d.ignored.length > 12 ? ` +${d.ignored.length - 12}` : ''}
+              </div>
             )}
           </div>
         </div>
-      );
-    }
-    return null;
-  };
-
-  const CompareTooltip = ({ active, payload, label }) => {
-      if (active && payload && payload.length) {
-        return (
-          <div className="bg-[#0e0e12]/95 border border-white/10 p-4 rounded-xl shadow-2xl backdrop-blur-xl z-50 min-w-[250px]">
-            <p className="text-slate-400 font-bold mb-3 pb-2 border-b border-white/5 text-[10px] uppercase tracking-widest">{label}</p>
-            <div className="flex flex-col gap-3">
-              {payload.map((entry, index) => {
-                  const [ent, mKey] = entry.dataKey.split('|');
-                  const mDef = data.metricDefs[mKey] || { unit: 'float' };
-                  const isInvalid = entry.payload[`${entry.dataKey}_invalid`];
-
-                  return (
-                    <div key={index} className="flex items-center justify-between text-sm gap-6">
-                        <div className="flex items-center gap-2">
-                            <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: entry.color }}></div>
-                            <span className="text-slate-300 capitalize truncate max-w-[180px]" title={`${ent} (${mKey})`}>
-                                <span className="font-semibold text-white">{ent}</span>
-                                <span className="text-slate-500 text-[10px] ml-1.5 uppercase tracking-wide">({mKey})</span>
-                            </span>
-                        </div>
-                        {isInvalid ? (
-                            <span className="text-amber-400 font-mono font-bold text-xs shrink-0"><AlertCircle size={10} className="inline"/> N/A</span>
-                        ) : (
-                            <span className="text-white font-mono font-bold shrink-0">{formatValue(entry.value, mDef.unit)}</span>
-                        )}
-                    </div>
-                  );
-              })}
-            </div>
-          </div>
-        );
-      }
-      return null;
-  };
-
-  const primaryCompareMetricDef = data.metricDefs[activeCompareMetrics[0]] || { unit: 'integer' };
-
-  return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
-        
-        {/* Deep Dive Toolbar */}
-        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-white/[0.02] p-4 rounded-2xl border border-white/5 shadow-xl">
-            
-            <div className="flex bg-[#0e0e12] p-1.5 rounded-xl border border-white/10 w-max">
-                <button onClick={() => setViewMode('explorer')} className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-all ${viewMode === 'explorer' ? 'bg-indigo-500/20 text-indigo-300' : 'text-slate-400 hover:text-white'}`}>
-                    <Search size={16} /> Semantic Explorer
-                </button>
-                <button onClick={() => setViewMode('compare')} className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-all ${viewMode === 'compare' ? 'bg-indigo-500/20 text-indigo-300' : 'text-slate-400 hover:text-white'}`}>
-                    <ArrowRightLeft size={16} /> Advanced Compare
-                </button>
-            </div>
-
-            <div className="flex flex-col md:flex-row items-start md:items-center gap-6">
-                <div>
-                    <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1.5 block">Analysis Period</label>
-                    <div className="flex items-center gap-2">
-                        <input type="date" value={dateRange.start} min={data.timeFrame.startRaw} max={data.timeFrame.endRaw} onChange={e => setDateRange(prev => ({...prev, start: e.target.value}))} className="bg-[#0e0e12] border border-white/10 text-slate-300 text-xs rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500/50 [color-scheme:dark]" />
-                        <span className="text-slate-600">-</span>
-                        <input type="date" value={dateRange.end} min={data.timeFrame.startRaw} max={data.timeFrame.endRaw} onChange={e => setDateRange(prev => ({...prev, end: e.target.value}))} className="bg-[#0e0e12] border border-white/10 text-slate-300 text-xs rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500/50 [color-scheme:dark]" />
-                    </div>
-                </div>
-
-                {viewMode === 'compare' && (
-                    <div>
-                         <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1.5 block">Time Granularity</label>
-                         <div className="flex bg-[#0e0e12] rounded-lg border border-white/10 overflow-hidden p-0.5">
-                             <button onClick={() => setGranularity('daily')} className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${granularity === 'daily' ? 'bg-indigo-500/20 text-indigo-300' : 'text-slate-400 hover:text-white'}`}>Daily</button>
-                             <button onClick={() => setGranularity('weekly')} className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${granularity === 'weekly' ? 'bg-indigo-500/20 text-indigo-300' : 'text-slate-400 hover:text-white'}`}>Weekly</button>
-                             <button onClick={() => setGranularity('monthly')} className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${granularity === 'monthly' ? 'bg-indigo-500/20 text-indigo-300' : 'text-slate-400 hover:text-white'}`}>Monthly</button>
-                         </div>
-                    </div>
-                )}
-            </div>
-        </div>
-
-        <GlassCard className="flex flex-col" title={viewMode === 'explorer' ? "Semantic Breakdown Explorer" : "Head-to-Head Comparison Engine"}>
-            
-            {/* Visualizer Configuration */}
-            <div className="shrink-0 mb-6 relative z-20">
-                {viewMode === 'explorer' ? (
-                    <div className="flex flex-col md:flex-row gap-4">
-                        <div className="flex-1">
-                            <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-2 block">Dimension Context</label>
-                            <select value={selectedDim} onChange={(e) => handleDimChange(e.target.value)} className="w-full bg-[#0e0e12] border border-white/10 text-white text-sm rounded-xl px-4 py-3 focus:outline-none focus:border-indigo-500/50 appearance-none capitalize">
-                                {dimKeys.map(d => (<option key={d} value={d}>{d}</option>))}
-                            </select>
-                        </div>
-                        <div className="flex-1">
-                            <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-2 flex items-center justify-between">
-                                Analyse Metric
-                                <div className="flex items-center gap-1 bg-[#0e0e12] rounded-md border border-white/5 overflow-hidden">
-                                    <button onClick={() => setChartType('line')} className={`p-1.5 transition-colors ${chartType === 'line' ? 'bg-indigo-500/20 text-indigo-400' : 'hover:bg-white/5'}`}><LineChartIcon size={14}/></button>
-                                    <button onClick={() => setChartType('scatter')} className={`p-1.5 transition-colors ${chartType === 'scatter' ? 'bg-indigo-500/20 text-indigo-400' : 'hover:bg-white/5'}`}><ScatterChartIcon size={14}/></button>
-                                    <button onClick={() => setChartType('bar')} className={`p-1.5 transition-colors ${chartType === 'bar' ? 'bg-indigo-500/20 text-indigo-400' : 'hover:bg-white/5'}`}><BarChart3 size={14}/></button>
-                                </div>
-                            </label>
-                            <select value={selectedMetric} onChange={(e) => setSelectedMetric(e.target.value)} className="w-full bg-[#0e0e12] border border-white/10 text-white text-sm rounded-xl px-4 py-3 focus:outline-none focus:border-cyan-500/50 appearance-none capitalize">
-                                {availableMetrics.map(m => (
-                                    <option key={m} value={m}>{m} {data.metricDefs[m]?.isNonAdditive ? '(Non-Additive)' : ''}</option>
-                                ))}
-                            </select>
-                        </div>
-                    </div>
-                ) : (
-                    <div className="space-y-4 bg-white/[0.02] p-4 rounded-xl border border-white/5">
-                        <div className="w-full">
-                            <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-2 block">Shared Comparison Dimension</label>
-                            <select value={selectedDim} onChange={(e) => handleDimChange(e.target.value)} className="w-full bg-[#0e0e12] border border-white/10 text-white text-sm rounded-xl px-4 py-3 focus:outline-none focus:border-indigo-500/50 appearance-none capitalize">
-                                {dimKeys.map(d => (<option key={d} value={d}>{d}</option>))}
-                            </select>
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            {[0, 1, 2].map(idx => (
-                                <div key={`ent-${idx}`}>
-                                    <label className="text-[10px] uppercase tracking-widest text-white font-bold mb-2 flex items-center">
-                                        <div className="w-1.5 h-1.5 rounded-full mr-2" style={{ backgroundColor: ENTITY_COLORS[idx] }}></div>
-                                        Entity {idx + 1}
-                                    </label>
-                                    <select value={compareEntities[idx]} onChange={(e) => updateCompareEntity(idx, e.target.value)} className="w-full bg-[#0e0e12] border border-white/10 text-white text-sm rounded-xl px-4 py-3 focus:outline-none focus:border-indigo-500/50 appearance-none">
-                                        <option value="">-- None --</option>
-                                        {availableItemsForDim.map(item => (<option key={`ent-${idx}-${item}`} value={item}>{item}</option>))}
-                                    </select>
-                                </div>
-                            ))}
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            {[0, 1, 2].map(idx => (
-                                <div key={`met-${idx}`}>
-                                    <label className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2 flex items-center">
-                                        <svg width="16" height="4" className="mr-2 shrink-0">
-                                             <line x1="0" y1="2" x2="16" y2="2" stroke="currentColor" strokeWidth="2" strokeDasharray={METRIC_DASHES[idx]} />
-                                        </svg>
-                                        Metric {idx + 1}
-                                    </label>
-                                    <select value={compareMetrics[idx]} onChange={(e) => updateCompareMetric(idx, e.target.value)} className="w-full bg-[#0e0e12] border border-white/10 text-white text-sm rounded-xl px-4 py-3 focus:outline-none focus:border-cyan-500/50 appearance-none capitalize">
-                                        <option value="">-- None --</option>
-                                        {availableMetrics.map(m => (<option key={`met-${idx}-${m}`} value={m}>{m}</option>))}
-                                    </select>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
-            </div>
-
-            {/* Rendering Engine */}
-            <div style={{ height: '550px', width: '100%', paddingBottom: '20px' }}>
-                {viewMode === 'explorer' ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                        {chartType === 'line' ? (
-                            <LineChart data={breakdownData} margin={{ top: 10, right: 30, left: 10, bottom: 130 }}>
-                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.03)" vertical={false} />
-                                <XAxis dataKey="name" stroke="#475569" tick={{fill: '#94a3b8', fontSize: 10}} axisLine={false} tickLine={false} minTickGap={10} angle={-45} textAnchor="end" height={120} tickFormatter={(val) => val.length > 30 ? val.substring(0,30)+'...' : val} />
-                                <YAxis stroke="#475569" tick={{fill: '#64748b', fontSize: 10}} axisLine={false} tickLine={false} tickFormatter={(v) => formatYAxisTick(v, activeMetricDef.unit)} />
-                                <RechartsTooltip content={<BreakdownTooltip />} cursor={{fill: 'rgba(255,255,255,0.02)'}} />
-                                <Line type="monotone" dataKey="value" name={selectedMetric} stroke="#818cf8" strokeWidth={3} dot={breakdownData.length === 1 ? {r: 5, fill: '#818cf8', strokeWidth: 0} : {r: 3, fill: '#818cf8', strokeWidth: 0}} activeDot={{r: 5, fill: '#818cf8', stroke: '#0e0e12', strokeWidth: 2}} />
-                            </LineChart>
-                        ) : chartType === 'scatter' ? (
-                            <ScatterChart margin={{ top: 10, right: 30, left: 10, bottom: 130 }}>
-                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.03)" />
-                                <XAxis type="category" dataKey="name" name="Entity" stroke="#475569" tick={{fill: '#94a3b8', fontSize: 10}} angle={-45} textAnchor="end" height={120} tickFormatter={(val) => val.length > 30 ? val.substring(0,30)+'...' : val} />
-                                <YAxis type="number" dataKey="value" name={selectedMetric} stroke="#475569" tick={{fill: '#64748b', fontSize: 10}} axisLine={false} tickLine={false} tickFormatter={(v) => formatYAxisTick(v, activeMetricDef.unit)} />
-                                <RechartsTooltip cursor={{strokeDasharray: '3 3'}} content={<BreakdownTooltip />} />
-                                <Scatter name={selectedMetric} data={breakdownData} fill="#818cf8">
-                                    {breakdownData.map((entry, index) => (
-                                        <Cell key={`cell-${index}`} fill={entry.isInvalidNonAdditive ? 'rgba(255,255,255,0.05)' : `hsl(238, 80%, ${70 - (index * 1.5)}%)`} />
-                                    ))}
-                                </Scatter>
-                            </ScatterChart>
-                        ) : (
-                            <BarChart data={breakdownData} layout="vertical" margin={{ top: 0, right: 30, left: 10, bottom: 0 }} barCategoryGap="20%">
-                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.03)" horizontal={true} vertical={false} />
-                                <XAxis type="number" stroke="#475569" tick={{fill: '#64748b', fontSize: 10}} axisLine={false} tickLine={false} tickFormatter={(v) => formatYAxisTick(v, activeMetricDef.unit)} />
-                                <YAxis type="category" dataKey="name" width={280} stroke="#475569" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={false} tickLine={false} tickFormatter={(val) => val.length > 40 ? val.substring(0,40)+'...' : val} />
-                                <RechartsTooltip cursor={{fill: 'rgba(255,255,255,0.02)'}} content={<BreakdownTooltip />} />
-                                <Bar dataKey="value" name={selectedMetric} radius={[0, 4, 4, 0]}>
-                                    {breakdownData.map((entry, index) => (
-                                        <Cell key={`cell-${index}`} fill={entry.isInvalidNonAdditive ? 'rgba(255,255,255,0.05)' : `hsl(238, 80%, ${70 - (index * 1.5)}%)`} />
-                                    ))}
-                                </Bar>
-                            </BarChart>
-                        )}
-                    </ResponsiveContainer>
-                ) : (
-                    <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={compareTimelineData} margin={{ top: 10, right: 10, left: -20, bottom: 130 }} key={compareMetrics.join('-')}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.03)" vertical={false} />
-                            <XAxis dataKey="dateFormatted" stroke="#475569" tick={{fill: '#64748b', fontSize: 10}} axisLine={false} tickLine={false} minTickGap={20} angle={-45} textAnchor="end" height={120} />
-                            <YAxis stroke="#475569" tick={{fill: '#64748b', fontSize: 10}} axisLine={false} tickLine={false} tickFormatter={(v) => formatYAxisTick(v, primaryCompareMetricDef.unit)} />
-                            <RechartsTooltip content={<CompareTooltip />} cursor={{fill: 'rgba(255,255,255,0.02)'}} />
-                            <Legend wrapperStyle={{fontSize: '11px', paddingTop: '10px'}} iconType="circle" />
-                            
-                            {activeCompareEntities.map((ent, eIdx) => 
-                                activeCompareMetrics.map((mKey, mIdx) => {
-                                    const dataKey = `${ent}|${mKey}`;
-                                    const color = ENTITY_COLORS[eIdx % 3];
-                                    const dashStyle = METRIC_DASHES[mIdx % 3];
-                                    return (
-                                        <Line 
-                                            key={dataKey}
-                                            type="monotone" 
-                                            dataKey={dataKey} 
-                                            name={`${ent} (${mKey})`} 
-                                            stroke={color} 
-                                            strokeWidth={2} 
-                                            strokeDasharray={dashStyle}
-                                            dot={compareTimelineData.length === 1 ? {r: 4, fill: color, strokeWidth: 0} : {r: 1.5, fill: color, strokeWidth: 0}} 
-                                            activeDot={{r: 4, fill: color, stroke: '#0e0e12', strokeWidth: 2}} 
-                                        />
-                                    );
-                                })
-                            )}
-                        </LineChart>
-                    </ResponsiveContainer>
-                )}
-            </div>
-        </GlassCard>
+      )}
     </div>
   );
 };
 
-// --- APP SHELL & NAVIGATION ---
-
-export default function App() {
-  const [data, setData] = useState(null);
+const IngestionView = ({ files, activeId, onAdd, onRemove, onRename, onSelect }) => {
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [activeTab, setActiveTab] = useState('overview');
+  const [editing, setEditing] = useState(null);
+  const [draft, setDraft] = useState('');
+  const inputRef = useRef(null);
 
-  const handleFileUpload = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    setIsProcessing(true);
-    
-    const reader = new FileReader();
-    reader.onload = (event) => {
+  const handleFiles = async (list) => {
+    setBusy(true); setError(null);
+    const errs = [];
+    for (const file of Array.from(list)) {
       try {
-        const parsed = parseMetaCSV(event.target.result);
-        setData(parsed);
-        setError(null);
-        setActiveTab('overview');
-      } catch (err) {
-        setError(err.message || "Failed to parse CSV. Ensure it is a valid Meta Ads export.");
-      }
-      setIsProcessing(false);
-    };
-    reader.readAsText(file);
+        const text = await file.text();
+        const ds = parseMetaCSV(text, file.name.replace(/\.csv$/i, ''));
+        onAdd(ds, text);
+      } catch (e) { errs.push(`${file.name}: ${e.message}`); }
+    }
+    if (errs.length) setError(errs.join(' — '));
+    setBusy(false);
   };
 
-  const NavItem = ({ id, label, icon: Icon }) => (
-    <button 
-        onClick={() => { if(data) setActiveTab(id); }}
-        disabled={!data}
-        className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-medium text-sm
-        ${data && activeTab === id ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20' : 
-          data ? 'text-slate-400 hover:text-white hover:bg-white/5' : 'text-slate-600 cursor-not-allowed'}`}
-    >
-        <Icon size={18} /> {label}
-    </button>
+  return (
+    <div className="anim-in space-y-6 max-w-4xl mx-auto">
+      <div className="text-center space-y-2">
+        <h2 className="text-2xl font-light">Load <span className="font-bold">Ads Manager exports</span></h2>
+        <p className="text-[13px]" style={{ color: 'var(--ink-3)' }}>
+          Drop in as many CSVs as you like. Columns are matched by meaning rather than position, so campaign, ad set and
+          ad exports, any locale, any breakdown, all read correctly. Everything stays in this browser and is still here next visit.
+        </p>
+      </div>
+
+      <div className="dropzone p-9 text-center"
+        onDragOver={e => e.preventDefault()}
+        onDrop={e => { e.preventDefault(); handleFiles(e.dataTransfer.files); }}>
+        <label className="cursor-pointer flex flex-col items-center gap-4">
+          <span className="w-16 h-16 rounded-2xl flex items-center justify-center"
+            style={{ background: 'color-mix(in srgb, var(--accent) 14%, transparent)', color: 'var(--accent)' }}>
+            {busy ? <RefreshCw size={26} className="animate-spin" /> : <Upload size={26} />}
+          </span>
+          <span>
+            <span className="block font-bold">{files.length ? 'Add another export' : 'Choose or drop CSV files'}</span>
+            <span className="text-[12px]" style={{ color: 'var(--ink-4)' }}>Campaign, ad set or ad level · multiple files supported</span>
+          </span>
+          <input ref={inputRef} type="file" accept=".csv,text/csv" multiple className="hidden"
+            onChange={e => { handleFiles(e.target.files); e.target.value = ''; }} />
+        </label>
+      </div>
+
+      {error && (
+        <div className="card px-4 py-3 flex items-start gap-2.5 text-[13px]" style={{ color: 'var(--bad)', borderColor: 'color-mix(in srgb, var(--bad) 35%, transparent)' }}>
+          <AlertTriangle size={16} className="shrink-0 mt-0.5" /><span>{error}</span>
+        </div>
+      )}
+
+      {files.map(f => {
+        const ds = f.ds;
+        const fmt = makeFmt(ds);
+        const isActive = f.id === activeId;
+        return (
+          <div key={f.id} className={`card px-5 py-4 ${isActive ? '' : 'card-quiet'}`}
+            style={isActive ? { borderColor: 'color-mix(in srgb, var(--accent) 45%, transparent)' } : undefined}>
+            <div className="flex items-start gap-3">
+              <span className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                style={{ background: 'color-mix(in srgb, var(--good) 14%, transparent)', color: 'var(--good)' }}>
+                <CheckCircle2 size={16} />
+              </span>
+              <div className="flex-1 min-w-0">
+                {editing === f.id ? (
+                  <input autoFocus className="field w-full font-bold" value={draft}
+                    onChange={e => setDraft(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { onRename(f.id, draft.trim() || f.name); setEditing(null); } if (e.key === 'Escape') setEditing(null); }}
+                    onBlur={() => { onRename(f.id, draft.trim() || f.name); setEditing(null); }} />
+                ) : (
+                  <button className="font-bold text-left truncate block max-w-full" onClick={() => onSelect(f.id)}>{f.name}</button>
+                )}
+                <div className="text-[11px] num mt-1" style={{ color: 'var(--ink-4)' }}>
+                  {ds.levelsPresent.join(' / ')} · {nf(ds.rowCount)} rows · {ds.currency}
+                  {ds.dateRange.start ? ` · ${longDate(ds.dateRange.start)} → ${longDate(ds.dateRange.end)}` : ' · lifetime'}
+                </div>
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {isActive && <span className="chip t-info">Active</span>}
+                  {ds.timeGrain === 'lifetime' && (
+                    <Tip tip="Without a Day breakdown there is no time axis, so trend charts, click-through decay and period comparison are unavailable for this file.">
+                      <span className="chip t-warn help">No time data</span>
+                    </Tip>
+                  )}
+                  {ds.indicators.length > 1 && (
+                    <Tip tip={`Mixed optimisation goals: ${ds.indicators.join(', ')}. Cost per result is only comparable within one goal — use the goal filter in the control bar.`}>
+                      <span className="chip t-warn help">{ds.indicators.length} goals</span>
+                    </Tip>
+                  )}
+                  {ds.attributions.length > 1 && (
+                    <Tip tip={`Rows use different attribution windows (${ds.attributions.join(' · ')}). A 7-day-click ad will always outperform the same ad on 1-day.`}>
+                      <span className="chip t-bad help">Mixed attribution</span>
+                    </Tip>
+                  )}
+                  {!!ds.breakdowns.length && <span className="chip t-muted">{ds.breakdowns.join(' × ')}</span>}
+                  {ds.hasRanks && (
+                    <Tip tip="This export includes Meta's own Quality, Engagement and Conversion rate rankings, which are used in the diagnosis.">
+                      <span className="chip t-good help">Rankings</span>
+                    </Tip>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <Tip tip="Rename — useful for tagging, e.g. “June · ad level” or “Previous period”.">
+                  <button className="btn p-1.5" onClick={() => { setEditing(f.id); setDraft(f.name); }} aria-label="Rename"><Pencil size={13} /></button>
+                </Tip>
+                <Tip tip="Remove this file from the browser.">
+                  <button className="btn p-1.5" onClick={() => onRemove(f.id)} aria-label="Remove"><Trash2 size={13} /></button>
+                </Tip>
+              </div>
+            </div>
+
+            {(!!ds.warnings.length || !!ds.notes.length) && (
+              <div className="mt-3 space-y-1.5">
+                {ds.warnings.map((w, i) => (
+                  <div key={`w${i}`} className="flex items-start gap-2 text-[11.5px]" style={{ color: 'var(--warn)' }}>
+                    <AlertTriangle size={13} className="shrink-0 mt-0.5" /><span>{w}</span>
+                  </div>
+                ))}
+                {ds.notes.map((n, i) => (
+                  <div key={`n${i}`} className="flex items-start gap-2 text-[11.5px]" style={{ color: 'var(--ink-3)' }}>
+                    <Info size={13} className="shrink-0 mt-0.5" /><span>{n}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <ParseReport ds={ds} fmt={fmt} />
+          </div>
+        );
+      })}
+
+      <Card title="How to export so nothing is lost" icon={Lightbulb} quiet>
+        <div className="space-y-2">
+          {RECIPE.map(([k, v]) => (
+            <div key={k} className="flex gap-3 text-[12px]">
+              <span className="font-bold shrink-0 w-[86px]" style={{ color: 'var(--accent)' }}>{k}</span>
+              <span style={{ color: 'var(--ink-3)' }}>{v}</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
   );
+};
+
+/* ===================================================================== */
+/* OVERVIEW                                                               */
+/* ===================================================================== */
+
+const FINDING_STYLE = {
+  cut: { icon: Scissors, tone: 't-bad' },
+  reallocate: { icon: ArrowRight, tone: 't-good' },
+  scale: { icon: TrendingUp, tone: 't-good' },
+  risk: { icon: ShieldAlert, tone: 't-warn' },
+  creative: { icon: Flame, tone: 't-warn' },
+  landing: { icon: Crosshair, tone: 't-warn' },
+  auction: { icon: Gauge, tone: 't-info' },
+  fatigue: { icon: Flame, tone: 't-warn' },
+  patience: { icon: FileWarning, tone: 't-muted' },
+  measurement: { icon: Info, tone: 't-muted' },
+};
+
+const OverviewView = ({ ds, entities, scored, bench, findings, ctrl, fmt, onFocus, series }) => {
+  const [metric, setMetric] = useState('cpa');
+  const [smooth, setSmooth] = useState(true);
+  const ts = useMemo(() => timeSeries(ds, {
+    grain: ctrl.grain, filters: { dateFrom: ctrl.dateFrom, dateTo: ctrl.dateTo, indicator: ctrl.indicator },
+  }), [ds, ctrl.grain, ctrl.dateFrom, ctrl.dateTo, ctrl.indicator]);
+
+  // 216 raw daily points on a 7-month export is unreadable noise; a trailing
+  // average shows the trend without hiding the spikes entirely.
+  const plot = useMemo(() => {
+    if (!smooth || ts.points.length < 14) return ts.points;
+    const w = 7;
+    return ts.points.map((p, i) => {
+      const win = ts.points.slice(Math.max(0, i - w + 1), i + 1);
+      const avg = (k) => {
+        const v = win.map(x => x[k]).filter(x => typeof x === 'number' && isFinite(x));
+        return v.length ? v.reduce((s, x) => s + x, 0) / v.length : null;
+      };
+      return { ...p, spend: avg('spend'), cpa: avg('cpa'), ctr: avg('ctr'), cvr: avg('cvr'), cpm: avg('cpm'), conv: avg('conv') };
+    });
+  }, [ts.points, smooth]);
+
+  const verdictMix = useMemo(() => {
+    const m = {};
+    scored.forEach(e => { m[e.verdict] = m[e.verdict] || { n: 0, spend: 0 }; m[e.verdict].n++; m[e.verdict].spend += e.m.spend; });
+    return m;
+  }, [scored]);
+
+  const wasted = scored.reduce((s, e) => s + e.waste, 0);
+  const atRisk = scored.filter(e => e.verdict === 'cut').reduce((s, e) => s + e.m.spend, 0);
+  const producers = scored.filter(e => e.m.conv > 0).length;
+  const levelWord = ctrl.level === 'ad' ? 'ads' : ctrl.level === 'adset' ? 'ad sets' : 'campaigns';
+
+  const METRICS = {
+    cpa: { label: `Cost per ${ds.convLabel.toLowerCase().replace(/s$/, '')}`, fmt: v => fmt.money(v), color: 'var(--teal)' },
+    spend: { label: 'Spend', fmt: v => fmt.money(v), color: 'var(--accent-2)' },
+    conv: { label: ds.convLabel, fmt: v => fmt.int(v), color: 'var(--good)' },
+    ctr: { label: 'Click-through rate', fmt: v => fmt.pct(v), color: 'var(--teal)' },
+    cvr: { label: 'Conversion rate', fmt: v => fmt.pct(v), color: 'var(--info)' },
+    cpm: { label: 'Cost per 1,000 impressions', fmt: v => fmt.money(v), color: 'var(--warn)' },
+  };
 
   return (
-    <div className="min-h-screen bg-[#050507] text-slate-200 font-sans selection:bg-indigo-500/30 overflow-hidden flex flex-col md:flex-row">
-      
-      {/* Background Ambience */}
-      <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden">
-        <div className="absolute top-[-20%] left-[-10%] h-[70vw] w-[70vw] rounded-full bg-indigo-900/10 blur-[120px] mix-blend-screen" />
-        <div className="absolute bottom-[-20%] right-[-10%] h-[60vw] w-[60vw] rounded-full bg-cyan-900/10 blur-[120px] mix-blend-screen" />
+    <div className="anim-in space-y-5">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <Stat label="Spend" value={fmt.moneyCompact(bench.totals.spend)}
+          sub={`${nf(entities.length)} ${levelWord}${ds.dateRange.start ? ` · ${shortDate(ds.dateRange.start)}–${shortDate(ds.dateRange.end)}` : ''}`}
+          tip="Total spend across everything matching the current filters. This is the only figure that is always exactly as Meta reports it — everything else is derived." />
+        <Stat label={ds.convLabel} value={fmt.int(bench.totals.conv)}
+          sub={`${producers} of ${entities.length} ${levelWord} converting`}
+          tip={`Conversions counted only from rows optimising for ${ds.primaryIndicator || ds.convLabel.toLowerCase()}. Rows chasing a different goal are excluded so this number means one thing.`} />
+        <Stat label={`Blended cost per ${ds.convLabel.toLowerCase().replace(/s$/, '')}`}
+          value={fmt.money(bench.cpa)}
+          tone={bench.cpa === null ? undefined : bench.cpa <= ctrl.targetCpa ? 'var(--good)' : 'var(--bad)'}
+          sub={`Target ${fmt.money0(ctrl.targetCpa)}${bench.cpa ? ` · ${bench.cpa <= ctrl.targetCpa ? 'inside' : ((bench.cpa / ctrl.targetCpa - 1) * 100).toFixed(0) + '% over'}` : ''}`}
+          tip="On-goal spend divided by conversions, computed from totals rather than averaging each entity's rate — a £5 ad with one lucky conversion cannot drag the account figure around." />
+        <Stat label="Above-target spend" value={fmt.moneyCompact(wasted)}
+          tone={wasted > 0 ? 'var(--warn)' : 'var(--good)'}
+          sub={atRisk > 0 ? `${fmt.moneyCompact(atRisk)} on ${levelWord} rated Cut` : 'Nothing clearly overspending'}
+          tip={`How much more you paid than target efficiency would have cost, summed over every ${levelWord.slice(0, -1)} above target: spend minus (conversions × ${fmt.money0(ctrl.targetCpa)}). Entities with zero conversions contribute their whole spend.`} />
       </div>
 
-      {/* Sidebar Navigation */}
-      <aside className="relative z-50 w-full md:w-64 bg-[#0a0a0c]/80 backdrop-blur-2xl border-r border-white/5 flex flex-col shrink-0">
-          <div className="p-6 border-b border-white/5 flex items-center gap-3">
-              <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-[0_0_15px_rgba(99,102,241,0.4)]">
-                  <Activity size={18} className="text-white" />
-              </div>
-              <div>
-                  <h1 className="font-bold text-white tracking-wide">Meta<span className="font-light">Vision</span></h1>
-              </div>
-          </div>
-          
-          <nav className="flex-1 p-4 space-y-2">
-              <div className="px-4 py-2 text-[10px] font-bold text-slate-600 uppercase tracking-widest">Platform</div>
-              <NavItem id="overview" label="Overview" icon={LayoutDashboard} />
-              <NavItem id="deepdive" label="Deep Dive" icon={Search} />
-          </nav>
-
-          {data && (
-              <div className="p-4 border-t border-white/5">
-                  <button 
-                      onClick={() => setData(null)}
-                      className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-white/5 transition-colors border border-white/5"
-                  >
-                      <RefreshCw size={16} /> New Export
-                  </button>
-              </div>
-          )}
-      </aside>
-
-      {/* Main Content Area */}
-      <main className="flex-1 relative z-10 h-screen overflow-y-auto custom-scrollbar">
-          
-          {/* Header */}
-          <header className="px-6 py-8 md:px-10 md:py-10 max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b border-white/[0.02]">
-             <div>
-                 <h2 className="text-3xl font-light text-white mb-2 tracking-tight">
-                     Ads <span className="font-bold">Intelligence</span>
-                 </h2>
-                 <p className="text-slate-400 text-sm font-medium">
-                     Semantic parsing engine. Zero latency. Infinite clarity.
-                 </p>
-             </div>
-             {data && (
-                 <div className="flex flex-col items-end gap-2">
-                     <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-bold uppercase tracking-widest">
-                         <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></div>
-                         Live View
-                     </div>
-                     <div className="flex items-center gap-1.5 text-xs text-slate-400 font-mono bg-white/[0.02] px-3 py-1.5 rounded-lg border border-white/5">
-                        <Calendar size={12} className="text-indigo-400" />
-                        {data.timeFrame.start} <span className="mx-1">→</span> {data.timeFrame.end}
-                     </div>
-                 </div>
-             )}
-          </header>
-
-          <div className="px-6 py-8 md:px-10 max-w-7xl mx-auto pb-24">
-             {!data ? (
-                <div className="max-w-2xl mx-auto mt-10 animate-in fade-in slide-in-from-bottom-8 duration-700">
-                    <GlassCard className="p-12 text-center border-dashed border-2 hover:border-indigo-500/40 hover:bg-[#0e0e12]/80 group">
-                        <label className="cursor-pointer flex flex-col items-center">
-                            <div className="w-24 h-24 rounded-3xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 mb-6 group-hover:scale-110 group-hover:bg-indigo-500/20 transition-all shadow-[0_0_40px_rgba(99,102,241,0.1)]">
-                                {isProcessing ? <RefreshCw className="animate-spin" size={32} /> : <Upload size={32} />}
-                            </div>
-                            <h3 className="text-2xl font-bold text-white mb-2">Upload Meta CSV</h3>
-                            <p className="text-slate-400 text-sm max-w-sm">
-                                Drag and drop your exported Campaign, Ad Set, or Ad report from Ads Manager.
-                            </p>
-                            <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
-                        </label>
-                    </GlassCard>
-
-                    {error && (
-                        <div className="mt-6 p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center gap-3 text-rose-200 text-sm animate-in slide-in-from-top-2">
-                            <AlertCircle size={18} className="shrink-0" /> {error}
+      {!!findings.length && (
+        <Card title={`What to do — ${findings.length} findings, most consequential first`} icon={Lightbulb} pad={false}>
+          <div className="px-5 pb-5 grid gap-3 lg:grid-cols-2">
+            {findings.map((f, i) => {
+              const st = FINDING_STYLE[f.kind] || FINDING_STYLE.measurement;
+              const Icon = st.icon;
+              return (
+                <div key={i} className="card card-quiet px-4 py-3.5">
+                  <div className="flex items-start gap-3">
+                    <span className={`chip ${st.tone} shrink-0`} style={{ padding: 5 }}><Icon size={12} /></span>
+                    <div className="min-w-0">
+                      <div className="font-semibold text-[13px] leading-snug">{f.title}</div>
+                      <p className="text-[12px] mt-1.5 leading-relaxed" style={{ color: 'var(--ink-3)' }}>{f.body}</p>
+                      {!!f.entities.length && (
+                        <div className="flex flex-wrap gap-1.5 mt-2.5">
+                          {f.entities.slice(0, 5).map(k => (
+                            <button key={k} className="btn px-2 py-0.5 text-[10px] num truncate max-w-[190px]"
+                              onClick={() => onFocus(k)} title={`Show ${k} in the table`}>{k}</button>
+                          ))}
                         </div>
-                    )}
+                      )}
+                    </div>
+                  </div>
                 </div>
-             ) : (
-                <>
-                   {activeTab === 'overview' && <MetaDashboard data={data} />}
-                   {activeTab === 'deepdive' && <DeepDiveDashboard data={data} />}
-                </>
-             )}
-      </div>
-      </main>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {ds.timeGrain !== 'lifetime' ? (
+        <Card title="Over time" icon={LayoutDashboard}
+          right={<div className="flex items-center gap-2">
+            {ts.points.length >= 14 && (
+              <Tip tip="A trailing seven-day average. Daily figures on a long export swing wildly because a single conversion moves the cost sharply; the average shows the direction of travel. Switch it off to see the raw days.">
+                <div className="seg"><button aria-pressed={smooth} onClick={() => setSmooth(true)}>7-day avg</button>
+                  <button aria-pressed={!smooth} onClick={() => setSmooth(false)}>Daily</button></div>
+              </Tip>
+            )}
+            <select className="field text-[11px] py-1" value={metric} onChange={e => setMetric(e.target.value)}>
+              {Object.entries(METRICS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+            </select>
+          </div>}>
+          <div style={{ height: 300 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={plot} margin={{ top: 6, right: 8, left: 0, bottom: 4 }}>
+                <defs>
+                  <linearGradient id="gSpend" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="var(--accent-2)" stopOpacity={0.28} />
+                    <stop offset="100%" stopColor="var(--accent-2)" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid stroke="var(--grid)" strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="date" tickFormatter={shortDate} stroke="var(--axis)" tickLine={false} minTickGap={22} />
+                <YAxis yAxisId="l" stroke="var(--axis)" tickLine={false} axisLine={false}
+                  tickFormatter={v => fmt.moneyCompact(v)} />
+                <YAxis yAxisId="r" orientation="right" stroke="var(--axis)" tickLine={false} axisLine={false}
+                  tickFormatter={v => metric === 'ctr' || metric === 'cvr' ? nf(v, 1) + '%' : metric === 'conv' ? nf(v, 0) : fmt.moneyCompact(v)} />
+                <RTooltip content={<ChartTip fmt={fmt} unitFor={p => p.dataKey === 'spend' ? (v => fmt.money(v)) : METRICS[metric].fmt} />}
+                  labelFormatter={longDate} />
+                <Area yAxisId="l" type="monotone" dataKey="spend" name="Spend" stroke="var(--accent-2)"
+                  strokeWidth={1.6} fill="url(#gSpend)" isAnimationActive={false} dot={false} />
+                <Line yAxisId="r" type="monotone" dataKey={metric} name={METRICS[metric].label}
+                  stroke={METRICS[metric].color} strokeWidth={2.4} dot={false} isAnimationActive={false} connectNulls />
+                {metric === 'cpa' && <ReferenceLine yAxisId="r" y={ctrl.targetCpa} stroke="var(--good)" strokeDasharray="5 4"
+                  label={{ value: `target ${fmt.money0(ctrl.targetCpa)}`, position: 'insideTopRight', fill: 'var(--good)', fontSize: 10 }} />}
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="flex flex-wrap items-center gap-4 mt-2.5 text-[11px]" style={{ color: 'var(--ink-4)' }}>
+            <span className="flex items-center gap-1.5">
+              <span className="w-3 h-0" style={{ borderTop: '7px solid color-mix(in srgb, var(--accent-2) 40%, transparent)' }} />
+              Spend, left axis
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-3" style={{ borderTop: `2px solid ${METRICS[metric].color}` }} />
+              {METRICS[metric].label}, right axis
+            </span>
+            <span>Gaps mean no conversions that day, which is not the same as a zero.</span>
+          </div>
+        </Card>
+      ) : (
+        <Card title="Over time" icon={LayoutDashboard} quiet>
+          <div className="flex items-start gap-3 text-[12.5px]" style={{ color: 'var(--ink-3)' }}>
+            <Info size={16} className="shrink-0 mt-0.5" style={{ color: 'var(--warn)' }} />
+            <span>This export has no time column, so there is nothing honest to plot over time. Re-export with
+              <b style={{ color: 'var(--ink-2)' }}> Breakdown → By Time → Day</b> and this chart, click-through decay detection
+              and the Change tab all become available.</span>
+          </div>
+        </Card>
+      )}
+
+      <Card title={`Where the money sits — ${levelWord} by verdict`} icon={Target}>
+        <div className="space-y-2.5">
+          {Object.entries(VERDICTS).filter(([k]) => verdictMix[k]).map(([k, v]) => {
+            const row = verdictMix[k];
+            const share = bench.totals.spend > 0 ? row.spend / bench.totals.spend : 0;
+            return (
+              <div key={k} className="flex items-center gap-3">
+                <div className="w-[104px] shrink-0"><Tip tip={v.blurb}><span className="help"><Badge verdict={k} /></span></Tip></div>
+                <div className="flex-1 bar"><span style={{ width: `${Math.max(share * 100, 0.6)}%` }} /></div>
+                <div className="w-[128px] text-right num text-[12px] shrink-0">
+                  {fmt.moneyCompact(row.spend)} <span style={{ color: 'var(--ink-4)' }}>· {row.n}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
     </div>
+  );
+};
+
+/* ===================================================================== */
+/* PERFORMANCE — table + quadrant map                                     */
+/* ===================================================================== */
+
+const RankDots = ({ m }) => {
+  const items = [['Quality', m.rankQuality], ['Engagement', m.rankEngagement], ['Conversion', m.rankConversion]];
+  if (items.every(([, v]) => v === null)) return <span style={{ color: 'var(--ink-4)' }}>—</span>;
+  const col = (v) => v === null ? 'var(--edge)' : v > 0 ? 'var(--good)' : v < 0 ? 'var(--bad)' : 'var(--ink-4)';
+  const word = (v) => v === null ? 'not rated' : v > 0 ? 'above average' : v < 0 ? 'below average' : 'average';
+  return (
+    <Tip tip={<span>Meta&rsquo;s own ranking against ads competing for the same audience.{items.map(([n, v]) => <span key={n}><br />{n}: <b>{word(v)}</b></span>)}<br /><br />Below average on quality points at the creative; below average on conversion rate points past the click.</span>}>
+      <span className="inline-flex gap-1 items-center help">
+        {items.map(([n, v]) => <span key={n} className="w-2 h-2 rounded-full" style={{ background: col(v) }} />)}
+      </span>
+    </Tip>
+  );
+};
+
+const RowDetail = ({ e, bench, ds, fmt, ctrl }) => {
+  const parts = e.diagnosis.parts;
+  const worstLabel = { cpm: 'the auction — a narrow audience or heavy overlap with your other ad sets', ctr: 'the creative — the first seconds and the headline are not earning the click', cvr: 'what happens after the click — the landing page, offer or form' };
+  return (
+    <tr>
+      <td colSpan={99} style={{ background: 'var(--hover)' }}>
+        <div className="px-2 py-4 grid lg:grid-cols-3 gap-6">
+          <div>
+            <div className="eyebrow mb-2">Verdict</div>
+            <div className="flex items-center gap-2 mb-2"><Badge verdict={e.verdict} /></div>
+            <p className="text-[12px] leading-relaxed" style={{ color: 'var(--ink-2)' }}>{e.reason}</p>
+            {e.ci && (
+              <p className="text-[11.5px] mt-2 leading-relaxed" style={{ color: 'var(--ink-3)' }}>
+                With {e.m.conv} {ds.convLabel.toLowerCase()}, the true cost is most likely between{' '}
+                <span className="num">{fmt.money(e.ci.low)}</span> and <span className="num">{fmt.money(e.ci.high)}</span>.
+                {e.ci.low <= ctrl.targetCpa && e.ci.high >= ctrl.targetCpa && ' That range straddles your target, so this is not yet a decision.'}
+              </p>
+            )}
+            {e.m.offGoalSpend > 0 && (
+              <p className="text-[11.5px] mt-2" style={{ color: 'var(--warn)' }}>
+                {fmt.money(e.m.offGoalSpend)} of its spend chased a different goal and is excluded from the cost figure.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <div className="eyebrow mb-2">Where it wins or loses</div>
+            <div className="space-y-2">
+              {parts.map(p => {
+                const worse = p.rel > 1;
+                const pctOff = Math.abs(p.rel - 1) * 100;
+                return (
+                  <div key={p.stage} className="text-[11.5px]">
+                    <div className="flex justify-between mb-1">
+                      <span style={{ color: 'var(--ink-2)' }}>{p.label}</span>
+                      <span className="num" style={{ color: worse ? 'var(--bad)' : 'var(--good)' }}>
+                        {pctOff < 5 ? 'in line' : `${pctOff.toFixed(0)}% ${worse ? 'worse' : 'better'}`}
+                      </span>
+                    </div>
+                    <div className="bar" style={{ background: 'var(--edge-soft)' }}>
+                      <span style={{
+                        width: `${Math.min(100, 50 * p.rel)}%`,
+                        background: worse ? 'var(--bad)' : 'var(--good)',
+                      }} />
+                    </div>
+                    <div className="num mt-1" style={{ color: 'var(--ink-4)' }}>
+                      {p.stage === 'cpm' ? `${fmt.money(p.value)} vs ${fmt.money(p.bench)}` : `${fmt.pct(p.value)} vs ${fmt.pct(p.bench)}`}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {e.diagnosis.worst && (
+              <p className="text-[11.5px] mt-3 leading-relaxed" style={{ color: 'var(--ink-3)' }}>
+                The cost problem here is mostly {worstLabel[e.diagnosis.worst.stage]}.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <div className="eyebrow mb-2">Signals</div>
+            {e.fatigue.length ? (
+              <ul className="space-y-1.5">
+                {e.fatigue.map((f, i) => (
+                  <li key={i} className="flex gap-2 text-[11.5px]" style={{ color: 'var(--ink-2)' }}>
+                    <Flame size={13} className="shrink-0 mt-0.5" style={{ color: 'var(--warn)' }} />{f.text}
+                  </li>
+                ))}
+              </ul>
+            ) : <p className="text-[11.5px]" style={{ color: 'var(--ink-4)' }}>No fatigue or ranking warnings.</p>}
+            <div className="mt-3 grid grid-cols-2 gap-y-1.5 text-[11.5px]">
+              {[['Impressions', fmt.int(e.m.impressions)], ['Clicks', fmt.int(e.m.clicks)],
+                ['Reach', e.m.reach === null ? 'n/a' : fmt.int(e.m.reach)],
+                ['Frequency', e.m.frequency === null ? 'n/a' : fmt.dec(e.m.frequency)],
+                ['Cost per click', fmt.money(e.m.cpc)],
+                ['Revenue', e.m.revenue ? fmt.money0(e.m.revenue) : '—'],
+                ['ROAS', e.m.roas ? fmt.ratio(e.m.roas) : '—'],
+                ['Days running', e.m.activeDays ? nf(e.m.activeDays) : 'n/a']].map(([k, v]) => (
+                <React.Fragment key={k}>
+                  <span style={{ color: 'var(--ink-4)' }}>{k}</span><span className="num text-right">{v}</span>
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+        </div>
+      </td>
+    </tr>
+  );
+};
+
+const QuadrantMap = ({ scored, bench, ctrl, fmt, ds, onFocus }) => {
+  const plotted = scored.filter(e => e.m.cpa !== null && e.m.spend > 0);
+  const noConv = scored.filter(e => e.m.cpa === null && e.m.spend > 0).sort((a, b) => b.m.spend - a.m.spend);
+  const spendSplit = median(plotted.map(e => e.m.spend)) || 0;
+  // One £150 outlier squashes everything else onto the floor, so the axis
+  // stops at the 95th percentile and anything above is pinned to the ceiling
+  // and counted underneath. The tooltip always shows the true figure.
+  const sortedCpa = plotted.map(e => e.m.cpa).sort((a, b) => a - b);
+  const p95 = sortedCpa.length ? sortedCpa[Math.floor((sortedCpa.length - 1) * 0.95)] : 0;
+  const maxCpa = Math.max(ctrl.targetCpa * 1.8, p95);
+  const above = plotted.filter(e => e.m.cpa > maxCpa);
+  const tone = { good: 'var(--good)', warn: 'var(--warn)', bad: 'var(--bad)', neutral: 'var(--info)', muted: 'var(--ink-4)' };
+
+  return (
+    <div className="space-y-4">
+      <Card title="Efficiency map — spend against cost per result" icon={Crosshair}
+        right={<Tip tip={<span>Each dot is one entity. Horizontal = how much it spends (log scale, because budgets differ by orders of magnitude). Vertical = what a result costs. Dot size = number of conversions.<br /><br />The green line is your target and the vertical line is median spend, which splits the picture into four decisions.</span>}>
+          <span className="chip t-muted help"><Info size={10} />How to read</span></Tip>}>
+        <div style={{ height: 380 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <ScatterChart margin={{ top: 12, right: 16, bottom: 28, left: 4 }}>
+              <CartesianGrid stroke="var(--grid)" strokeDasharray="3 3" />
+              {/* quadrant washes */}
+              <ReferenceArea x1={0.01} x2={spendSplit} y1={0} y2={ctrl.targetCpa} fill="var(--good)" fillOpacity={0.05} />
+              <ReferenceArea x1={spendSplit} x2={Math.max(...plotted.map(e => e.m.spend)) * 1.4} y1={0} y2={ctrl.targetCpa} fill="var(--info)" fillOpacity={0.05} />
+              <ReferenceArea x1={spendSplit} x2={Math.max(...plotted.map(e => e.m.spend)) * 1.4} y1={ctrl.targetCpa} y2={maxCpa * 1.1} fill="var(--bad)" fillOpacity={0.06} />
+              <XAxis type="number" dataKey="x" scale="log" domain={['auto', 'auto']} allowDataOverflow
+                stroke="var(--axis)" tickLine={false} tickFormatter={v => fmt.moneyCompact(v)}
+                label={{ value: 'SPEND (LOG)', position: 'insideBottom', offset: -16, fill: 'var(--axis)', fontSize: 9, letterSpacing: '0.15em' }} />
+              <YAxis type="number" dataKey="y" stroke="var(--axis)" tickLine={false} axisLine={false}
+                tickFormatter={v => fmt.moneyCompact(v)} domain={[0, maxCpa * 1.1]} />
+              <ZAxis type="number" dataKey="z" range={[40, 420]} />
+              <ReferenceLine y={ctrl.targetCpa} stroke="var(--good)" strokeDasharray="5 4"
+                label={{ value: `target ${fmt.money0(ctrl.targetCpa)}`, position: 'insideTopLeft', fill: 'var(--good)', fontSize: 10 }} />
+              <ReferenceLine x={spendSplit} stroke="var(--axis)" strokeDasharray="2 4" />
+              <RTooltip content={({ active, payload }) => {
+                if (!active || !payload?.length) return null;
+                const d = payload[0].payload;
+                return (
+                  <div className="card px-3 py-2.5" style={{ maxWidth: 260 }}>
+                    <div className="font-semibold text-[12px] mb-1.5 break-words">{d.name}</div>
+                    <div className="flex items-center gap-2 mb-2"><Badge verdict={d.verdict} /></div>
+                    <div className="text-[11.5px] num space-y-0.5" style={{ color: 'var(--ink-2)' }}>
+                      <div>Spend {fmt.money(d.x)}</div>
+                      <div>Cost per result {fmt.money(d.cpa)}{d.clamped ? ' (above the top of the axis)' : ''}</div>
+                      <div>{d.z} {ds.convLabel.toLowerCase()}</div>
+                    </div>
+                  </div>
+                );
+              }} />
+              <Scatter data={plotted.map(e => ({
+                x: e.m.spend, y: Math.min(e.m.cpa, maxCpa), cpa: e.m.cpa, clamped: e.m.cpa > maxCpa,
+                z: Math.max(e.m.conv, 1), name: e.name, key: e.key, verdict: e.verdict,
+              }))} onClick={(p) => p?.key && onFocus(p.key)} isAnimationActive={false}>
+                {plotted.map((e, i) => <Cell key={i} fill={tone[VERDICTS[e.verdict].tone]} fillOpacity={0.75}
+                  stroke={tone[VERDICTS[e.verdict].tone]} />)}
+              </Scatter>
+            </ScatterChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="flex items-center justify-between gap-3 flex-wrap mt-2 text-[11px]" style={{ color: 'var(--ink-4)' }}>
+          <span>Each dot is coloured by its verdict and sized by conversions. Its <b style={{ color: 'var(--ink-3)' }}>position</b> is the quadrant.</span>
+          {!!above.length && <span>{above.length} sit above the top of the axis, pinned to the ceiling.</span>}
+        </div>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-2 mt-2.5 text-[11px]">
+          {[[0, 1, 'Cheap and small', 'Raise budgets here first. This is the least risky growth you have.'],
+            [1, 1, 'Cheap and big', 'Your engines. Protect them and do not fiddle with what is working.'],
+            [0, 0, 'Expensive and small', 'Tests. Either fund them enough to get a real read or stop them.'],
+            [1, 0, 'Expensive and big', 'Where the money is leaking. Fix or cut, in that order.']].map(([cx, cy, name, why]) => (
+            <div key={name} className="card card-quiet px-3 py-2.5">
+              <div className="flex items-center gap-2 mb-1.5">
+                <svg width="14" height="14" className="shrink-0" aria-hidden>
+                  <rect x="0.5" y="0.5" width="13" height="13" fill="none" stroke="var(--edge)" />
+                  <line x1="7" y1="0.5" x2="7" y2="13.5" stroke="var(--edge)" />
+                  <line x1="0.5" y1="7" x2="13.5" y2="7" stroke="var(--edge)" />
+                  <rect x={cx ? 7 : 0.5} y={cy ? 7 : 0.5} width="6.5" height="6.5" fill="var(--accent)" opacity="0.85" />
+                </svg>
+                <span className="font-bold text-[11px]">{name}</span>
+              </div>
+              <div style={{ color: 'var(--ink-4)' }}>{why}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {!!noConv.length && (
+        <Card title={`Not on the map — no ${ds.convLabel.toLowerCase()} yet`} icon={FileWarning} quiet>
+          <p className="text-[12px] mb-3" style={{ color: 'var(--ink-3)' }}>
+            These cannot be placed on a cost-per-result axis because they have not produced a result. That is not the same
+            as being bad: the question is only whether each has had a fair chance at {fmt.money0(ctrl.targetCpa)} a result.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {noConv.slice(0, 24).map(e => (
+              <button key={e.key} onClick={() => onFocus(e.key)}
+                className="btn px-2.5 py-1.5 text-[11px] flex items-center gap-2">
+                <span className="num truncate max-w-[180px]">{e.name}</span>
+                <span className="num" style={{ color: e.m.spend >= ctrl.targetCpa * 3 ? 'var(--bad)' : 'var(--ink-4)' }}>
+                  {fmt.money0(e.m.spend)}
+                </span>
+              </button>
+            ))}
+            {noConv.length > 24 && (
+              <span className="text-[11px] self-center" style={{ color: 'var(--ink-4)' }}>
+                and {noConv.length - 24} more, all under {fmt.money0(noConv[24].m.spend)}
+              </span>
+            )}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+};
+
+const PerformanceView = ({ ds, scored, bench, ctrl, fmt, series, onFocus, onCompare }) => {
+  const [view, setView] = useState('table');
+  const [cols, setCols] = useState('verdict');
+  const [expanded, setExpanded] = useState(null);
+  const [copied, setCopied] = useState(false);
+
+  const getters = useMemo(() => ({
+    name: e => e.name, verdict: e => Object.keys(VERDICTS).indexOf(e.verdict),
+    spend: e => e.m.spend, conv: e => e.m.conv, cpa: e => e.m.cpa,
+    ctr: e => e.m.ctr, cvr: e => e.m.cvr, cpm: e => e.m.cpm, cpc: e => e.m.cpc,
+    freq: e => e.m.frequency, waste: e => e.waste, roas: e => e.m.roas,
+    impressions: e => e.m.impressions, clicks: e => e.m.clicks,
+  }), []);
+  const { sorted, sort, setSort } = useSort(scored, { key: 'spend', dir: 'desc' }, getters);
+
+  const copyCSV = () => {
+    const heads = [
+      { label: ctrl.level, get: e => e.key }, { label: 'Verdict', get: e => VERDICTS[e.verdict].label },
+      { label: 'Why', get: e => e.reason }, { label: 'Spend', get: e => e.m.spend?.toFixed(2) },
+      { label: ds.convLabel, get: e => e.m.conv }, { label: 'CPA', get: e => e.m.cpa?.toFixed(2) ?? '' },
+      { label: 'CTR %', get: e => e.m.ctr?.toFixed(3) ?? '' }, { label: 'CVR %', get: e => e.m.cvr?.toFixed(3) ?? '' },
+      { label: 'CPM', get: e => e.m.cpm?.toFixed(2) ?? '' }, { label: 'Above-target spend', get: e => e.waste?.toFixed(2) },
+    ];
+    const csv = toCSV(sorted, heads);
+    const done = () => { setCopied(true); setTimeout(() => setCopied(false), 1600); };
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(csv).then(done).catch(done); else done();
+  };
+
+  if (view === 'map') {
+    return (
+      <div className="anim-in space-y-4">
+        <div className="flex justify-between items-center gap-3 flex-wrap">
+          <div className="seg">
+            <button aria-pressed={false} onClick={() => setView('table')}>Table</button>
+            <button aria-pressed={true} onClick={() => setView('map')}>Map</button>
+          </div>
+        </div>
+        <QuadrantMap scored={scored} bench={bench} ctrl={ctrl} fmt={fmt} ds={ds} onFocus={onFocus} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="anim-in space-y-4">
+      <div className="flex justify-between items-center gap-3 flex-wrap">
+        <div className="seg">
+          <button aria-pressed={true} onClick={() => setView('table')}>Table</button>
+          <Tip tip="Plot everything on spend against cost per result to see which quadrant each entity sits in.">
+            <button aria-pressed={false} onClick={() => setView('map')}>Map</button>
+          </Tip>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="seg">
+            {[['verdict', 'Verdict'], ['funnel', 'Funnel'], ['full', 'Everything']].map(([k, l]) => (
+              <Tip key={k} tip={k === 'verdict' ? 'Cost, volume and the call to make.'
+                : k === 'funnel' ? 'The three things that decide cost: what impressions cost, whether people click, and whether clicks convert.'
+                  : 'Every column, including reach, frequency, revenue and Meta\u2019s rankings.'}>
+                <button aria-pressed={cols === k} onClick={() => setCols(k)}>{l}</button>
+              </Tip>
+            ))}
+          </div>
+          <Tip tip="Copy the table as CSV, including the verdict and its reasoning, for pasting into a report.">
+            <button className={`btn px-2.5 py-1.5 text-[11px] font-semibold inline-flex items-center gap-1.5 ${copied ? 'btn-on' : ''}`} onClick={copyCSV}>
+              <Copy size={12} />{copied ? 'Copied' : 'Copy CSV'}
+            </button>
+          </Tip>
+        </div>
+      </div>
+
+      <div className="card overflow-hidden">
+        <div className="overflow-auto scroll" style={{ maxHeight: '70vh' }}>
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th className="stick sortable" style={{ textAlign: 'left', minWidth: 240 }}
+                  onClick={() => setSort(s => ({ key: 'name', dir: s.key === 'name' && s.dir === 'asc' ? 'desc' : 'asc' }))}>
+                  {ctrl.level === 'ad' ? 'Ad' : ctrl.level === 'adset' ? 'Ad set' : 'Campaign'}
+                </th>
+                <SortHead label="Call" k="verdict" sort={sort} setSort={setSort} align="left"
+                  tip="The judgement, based on your target, how much data there is, and whether a cause can be identified. Hover any badge for its rule." />
+                <SortHead label="Spend" k="spend" sort={sort} setSort={setSort} tip="Total spend in the filtered period, with its share of the account." />
+                <SortHead label={ds.convLabel} k="conv" sort={sort} setSort={setSort}
+                  tip={`Conversions from rows optimising for ${ds.primaryIndicator || 'this goal'}. Anything below ${ctrl.minConv} is not a reliable basis for a decision.`} />
+                <SortHead label="Cost / result" k="cpa" sort={sort} setSort={setSort}
+                  tip={`On-goal spend ÷ conversions, coloured against your ${fmt.money0(ctrl.targetCpa)} target. The small range beneath is the uncertainty implied by the conversion count.`} />
+                {cols !== 'verdict' && <>
+                  <SortHead label="CPM" k="cpm" sort={sort} setSort={setSort} tip="Cost per thousand impressions — what the auction is charging you. High CPM means a narrow audience, overlap with your own ad sets, or restrictive placements." />
+                  <SortHead label="CTR" k="ctr" sort={sort} setSort={setSort} tip="Click-through rate — whether the creative earns the click. This is the number the creative controls." />
+                  <SortHead label="CVR" k="cvr" sort={sort} setSort={setSort} tip="Of the people who clicked, the share who converted. This is the landing page, the offer and the form, not the ad." />
+                </>}
+                {cols === 'full' && <>
+                  <SortHead label="CPC" k="cpc" sort={sort} setSort={setSort} tip="Cost per link click." />
+                  <SortHead label="Freq" k="freq" sort={sort} setSort={setSort} tip="Average times each person saw it. Above about 2.5 in a short window, expect click-through to fall. Unavailable when several rows make up one entity, since reach cannot be added." />
+                  {ds.hasRevenue && <SortHead label="ROAS" k="roas" sort={sort} setSort={setSort} tip="Revenue ÷ spend, where the export carries conversion value." />}
+                  <th style={{ textAlign: 'center' }}><Tip tip="Meta's own Quality, Engagement and Conversion rankings against competing ads."><span className="help">Ranks</span></Tip></th>
+                </>}
+                <SortHead label="Over target" k="waste" sort={sort} setSort={setSort}
+                  tip={`Spend beyond what target efficiency would have cost: spend − (conversions × ${fmt.money0(ctrl.targetCpa)}). For zero-conversion entities it is the whole spend.`} />
+                {ds.timeGrain !== 'lifetime' && <th style={{ textAlign: 'center' }}>
+                  <Tip tip="Daily spend shape over the period — a quick read on whether it ran continuously or in bursts."><span className="help">Daily</span></Tip></th>}
+                <th style={{ width: 34 }} />
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map(e => {
+                const over = e.m.cpa !== null && e.m.cpa > ctrl.targetCpa;
+                const sp = series?.get(e.key);
+                return (
+                  <React.Fragment key={e.key}>
+                    <tr>
+                      <td className="stick">
+                        <div className="flex items-start gap-2">
+                          <div className="min-w-0">
+                            <div className="font-semibold truncate max-w-[260px]" title={e.name}>{e.name}</div>
+                            <div className="text-[10px] num truncate max-w-[260px]" style={{ color: 'var(--ink-4)' }}>
+                              {ctrl.level === 'ad' && e.adset ? e.adset : ctrl.level === 'adset' ? e.campaign : (e.m.delivery[0] || '')}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td style={{ textAlign: 'left' }}>
+                        <Tip tip={<span>{e.reason}<br /><br /><b>{VERDICTS[e.verdict].label}</b>: {VERDICTS[e.verdict].blurb}</span>}>
+                          <span className="help" style={{ borderBottom: 'none' }}><Badge verdict={e.verdict} /></span>
+                        </Tip>
+                      </td>
+                      <td>
+                        <div className="num">{fmt.money0(e.m.spend)}</div>
+                        <div className="bar mt-1" style={{ width: 54, marginLeft: 'auto' }}>
+                          <span style={{ width: `${Math.min(100, e.spendShare * 100)}%` }} />
+                        </div>
+                      </td>
+                      <td className="num" style={{ color: e.m.conv < ctrl.minConv ? 'var(--ink-4)' : 'var(--ink)' }}>
+                        {fmt.int(e.m.conv)}
+                      </td>
+                      <td>
+                        <div className="num font-semibold" style={{ color: e.m.cpa === null ? 'var(--ink-4)' : over ? 'var(--bad)' : 'var(--good)' }}>
+                          {fmt.money(e.m.cpa)}
+                        </div>
+                        {e.ci && <div className="num text-[10px]" style={{ color: 'var(--ink-4)' }}>
+                          {fmt.money0(e.ci.low)}–{fmt.money0(e.ci.high)}
+                        </div>}
+                      </td>
+                      {cols !== 'verdict' && <>
+                        <td><div className="num">{fmt.money(e.m.cpm)}</div><VsBench value={e.m.cpm} bench={bench.cpm} higherIsBetter={false} /></td>
+                        <td><div className="num">{fmt.pct(e.m.ctr)}</div><VsBench value={e.m.ctr} bench={bench.ctr} /></td>
+                        <td><div className="num">{fmt.pct(e.m.cvr)}</div><VsBench value={e.m.cvr} bench={bench.cvr} /></td>
+                      </>}
+                      {cols === 'full' && <>
+                        <td className="num">{fmt.money(e.m.cpc)}</td>
+                        <td className="num" style={{ color: e.m.frequency >= ctrl.fatigueFreq ? 'var(--warn)' : undefined }}>
+                          {e.m.frequency === null ? 'n/a' : fmt.dec(e.m.frequency)}
+                        </td>
+                        {ds.hasRevenue && <td className="num">{e.m.roas ? fmt.ratio(e.m.roas) : '—'}</td>}
+                        <td style={{ textAlign: 'center' }}><RankDots m={e.m} /></td>
+                      </>}
+                      <td className="num" style={{ color: e.waste > 0 ? 'var(--warn)' : 'var(--ink-4)' }}>
+                        {e.waste > 0 ? fmt.money0(e.waste) : '—'}
+                      </td>
+                      {ds.timeGrain !== 'lifetime' && (
+                        <td style={{ textAlign: 'center' }}>
+                          <Spark values={sp?.map(p => p.spend)} color={over ? 'var(--bad)' : 'var(--accent)'} />
+                        </td>
+                      )}
+                      <td>
+                        <div className="flex items-center gap-1 justify-end">
+                          <Tip tip="Add to the head-to-head comparison.">
+                            <button className="btn p-1" onClick={() => onCompare(e.key)} aria-label="Compare"><GitCompare size={12} /></button>
+                          </Tip>
+                          <button className="btn p-1" onClick={() => setExpanded(expanded === e.key ? null : e.key)}
+                            aria-label="Details">
+                            {expanded === e.key ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    {expanded === e.key && <RowDetail e={e} bench={bench} ds={ds} fmt={fmt} ctrl={ctrl} />}
+                  </React.Fragment>
+                );
+              })}
+              {!sorted.length && (
+                <tr><td colSpan={99} className="py-10 text-center text-[13px]" style={{ color: 'var(--ink-4)' }}>
+                  Nothing matches the current filters.
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p className="text-[11px]" style={{ color: 'var(--ink-4)' }}>
+        {sorted.length} rows. Click the arrow on any row for its full diagnosis, or the compare icon to line it up against another.
+      </p>
+    </div>
+  );
+};
+
+/* ===================================================================== */
+/* COMPARE                                                                */
+/* ===================================================================== */
+
+const CompareView = ({ ds, scored, bench, ctrl, fmt, picks, setPicks, series }) => {
+  const options = scored.map(e => e.key);
+  const chosen = picks.map(k => scored.find(e => e.key === k)).filter(Boolean);
+  const COLORS = ['var(--accent)', 'var(--teal)', 'var(--bad)', 'var(--warn)'];
+
+  const rows = [
+    { k: 'spend', label: 'Spend', get: e => e.m.spend, fmt: v => fmt.money0(v), better: null,
+      tip: 'Total spend. Not a quality signal on its own — it only sets how much the other numbers can be trusted.' },
+    { k: 'conv', label: ds.convLabel, get: e => e.m.conv, fmt: v => fmt.int(v), better: 'high',
+      tip: 'Conversions attributed to the primary goal.' },
+    { k: 'cpa', label: 'Cost per result', get: e => e.m.cpa, fmt: v => fmt.money(v), better: 'low',
+      tip: 'The headline efficiency number. Read it together with the confidence line below, not on its own.' },
+    { k: 'cpm', label: 'CPM', get: e => e.m.cpm, fmt: v => fmt.money(v), better: 'low',
+      tip: 'What the auction charges per thousand impressions. Differences here are about audience and placement, not creative.' },
+    { k: 'ctr', label: 'CTR', get: e => e.m.ctr, fmt: v => fmt.pct(v), better: 'high',
+      tip: 'Share of impressions that produced a click — the clearest read on the creative itself.' },
+    { k: 'cvr', label: 'Click → result', get: e => e.m.cvr, fmt: v => fmt.pct(v), better: 'high',
+      tip: 'Share of clicks that converted. Differences here point past the ad, to the page and the offer.' },
+    { k: 'cpc', label: 'Cost per click', get: e => e.m.cpc, fmt: v => fmt.money(v), better: 'low', tip: 'CPM and CTR combined.' },
+    { k: 'freq', label: 'Frequency', get: e => e.m.frequency, fmt: v => v === null ? 'n/a' : fmt.dec(v), better: 'low',
+      tip: 'Times the average person saw it. Only available where one row covers the whole entity.' },
+    { k: 'roas', label: 'ROAS', get: e => e.m.roas, fmt: v => v ? fmt.ratio(v) : '—', better: 'high', tip: 'Revenue ÷ spend where value is present.' },
+  ].filter(r => r.k !== 'roas' || ds.hasRevenue);
+
+  const tsData = useMemo(() => {
+    if (ds.timeGrain === 'lifetime' || !chosen.length) return [];
+    const maps = chosen.map(e => new Map((series.get(e.key) || []).map(p => [p.date, p])));
+    const dates = [...new Set(chosen.flatMap(e => (series.get(e.key) || []).map(p => p.date)))].sort();
+    return dates.map(d => {
+      const o = { date: d };
+      chosen.forEach((e, i) => {
+        const p = maps[i].get(d);
+        o[`${i}_spend`] = p?.spend ?? null;
+        o[`${i}_cpa`] = p?.cpa ?? null;
+        o[`${i}_ctr`] = p?.ctr ?? null;
+      });
+      return o;
+    });
+  }, [chosen, series, ds.timeGrain]);
+  const [tsMetric, setTsMetric] = useState('cpa');
+
+  return (
+    <div className="anim-in space-y-4">
+      <Card title="Choose up to four to line up" icon={GitCompare}>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {[0, 1, 2, 3].map(i => (
+            <div key={i}>
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: COLORS[i] }} />
+                <span className="eyebrow">Slot {i + 1}</span>
+              </div>
+              <select className="field w-full text-[12px]" value={picks[i] || ''}
+                onChange={e => { const n = [...picks]; n[i] = e.target.value || undefined; setPicks(n.filter((x, ix) => x || ix < 4)); }}>
+                <option value="">— none —</option>
+                {options.map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {chosen.length >= 1 && (
+        <div className="card overflow-hidden">
+          <div className="overflow-auto scroll">
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th className="stick" style={{ textAlign: 'left', minWidth: 170 }}>Measure</th>
+                  {chosen.map((e, i) => (
+                    <th key={e.key} style={{ textAlign: 'right', minWidth: 150 }}>
+                      <div className="flex items-center gap-1.5 justify-end">
+                        <span className="w-2 h-2 rounded-full" style={{ background: COLORS[i] }} />
+                        <span className="truncate max-w-[150px] normal-case tracking-normal text-[12px] font-semibold"
+                          style={{ color: 'var(--ink)' }} title={e.name}>{e.name}</span>
+                      </div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td className="stick" style={{ textAlign: 'left' }}>
+                    <Tip tip="The call for each, using the same rules as the table."><span className="help">Call</span></Tip>
+                  </td>
+                  {chosen.map(e => <td key={e.key}><Tip tip={e.reason}><span className="help" style={{ borderBottom: 'none' }}><Badge verdict={e.verdict} /></span></Tip></td>)}
+                </tr>
+                {rows.map(r => {
+                  const vals = chosen.map(r.get);
+                  const valid = vals.filter(v => v !== null && isFinite(v));
+                  const best = r.better === 'high' ? Math.max(...valid) : r.better === 'low' ? Math.min(...valid) : null;
+                  return (
+                    <tr key={r.k}>
+                      <td className="stick" style={{ textAlign: 'left' }}>
+                        <Tip tip={r.tip}><span className="help">{r.label}</span></Tip>
+                      </td>
+                      {chosen.map((e, i) => {
+                        const v = r.get(e);
+                        const isBest = best !== null && v === best && valid.length > 1;
+                        return (
+                          <td key={e.key} className="num" style={{
+                            color: isBest ? 'var(--good)' : undefined,
+                            fontWeight: isBest ? 700 : 400,
+                          }}>{r.fmt(v)}</td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {chosen.length >= 2 && (
+        <Card title="Is the difference real?" icon={Target}>
+          <div className="space-y-3">
+            {chosen.slice(1).map((e, idx) => {
+              const a = chosen[0], b = e;
+              const test = compareRates(a.m.conv, a.m.cpaSpend, b.m.conv, b.m.cpaSpend);
+              if (!test) return (
+                <p key={b.key} className="text-[12px]" style={{ color: 'var(--ink-4)' }}>
+                  Not enough conversions between <b>{a.name}</b> and <b>{b.name}</b> to test anything.
+                </p>
+              );
+              const sig = test.p < 0.05;
+              const winner = test.r1 > test.r2 ? a : b;
+              const loser = test.r1 > test.r2 ? b : a;
+              // z scales with the square root of volume, so the extra volume
+              // needed for a verdict follows directly.
+              const scale = Math.pow(1.96 / Math.abs(test.z), 2);
+              const extra = Math.max(0, Math.round((a.m.conv + b.m.conv) * (scale - 1)));
+              return (
+                <div key={b.key} className="card card-quiet px-4 py-3">
+                  <div className="flex items-start gap-2.5">
+                    <span className={`chip ${sig ? 't-good' : 't-muted'} shrink-0`} style={{ padding: 5 }}>
+                      {sig ? <CheckCircle2 size={12} /> : <Info size={12} />}
+                    </span>
+                    <div className="text-[12.5px] leading-relaxed">
+                      {sig ? (
+                        <>
+                          <b>{winner.name}</b> really is producing results more cheaply than <b>{loser.name}</b>
+                          {' '}({fmt.money(winner.m.cpa)} against {fmt.money(loser.m.cpa)}). At {(100 * (1 - test.p)).toFixed(1)}%
+                          confidence this gap is bigger than random variation, so it is safe to act on.
+                        </>
+                      ) : (
+                        <>
+                          The gap between <b>{a.name}</b> ({fmt.money(a.m.cpa)}) and <b>{b.name}</b> ({fmt.money(b.m.cpa)}) is
+                          <b> not distinguishable from noise</b> yet. Roughly {extra} more conversions between them would be
+                          needed before the difference could be called. Killing the more expensive one now would be a coin toss
+                          dressed up as a decision.
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            <p className="text-[11px]" style={{ color: 'var(--ink-4)' }}>
+              Conversions are treated as counts, so the uncertainty on a cost figure depends almost entirely on how many
+              conversions it rests on. Four versus six conversions is not a finding; forty versus sixty is.
+            </p>
+          </div>
+        </Card>
+      )}
+
+      {chosen.length >= 1 && ds.timeGrain !== 'lifetime' && (
+        <Card title="Over time" icon={LayoutDashboard}
+          right={<div className="seg">
+            {[['cpa', 'Cost'], ['spend', 'Spend'], ['ctr', 'CTR']].map(([k, l]) => (
+              <button key={k} aria-pressed={tsMetric === k} onClick={() => setTsMetric(k)}>{l}</button>
+            ))}
+          </div>}>
+          <div style={{ height: 280 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={tsData} margin={{ top: 6, right: 8, left: 0, bottom: 4 }}>
+                <CartesianGrid stroke="var(--grid)" strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="date" tickFormatter={shortDate} stroke="var(--axis)" tickLine={false} minTickGap={24} />
+                <YAxis stroke="var(--axis)" tickLine={false} axisLine={false}
+                  tickFormatter={v => tsMetric === 'ctr' ? nf(v, 1) + '%' : fmt.moneyCompact(v)} />
+                <RTooltip labelFormatter={longDate}
+                  content={<ChartTip fmt={fmt} unitFor={() => tsMetric === 'ctr' ? (v => fmt.pct(v)) : (v => fmt.money(v))} />} />
+                {tsMetric === 'cpa' && <ReferenceLine y={ctrl.targetCpa} stroke="var(--good)" strokeDasharray="5 4" />}
+                {chosen.map((e, i) => (
+                  <Line key={e.key} type="monotone" dataKey={`${i}_${tsMetric}`} name={e.name}
+                    stroke={COLORS[i]} strokeWidth={2.2} dot={false} connectNulls isAnimationActive={false} />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      )}
+
+      {!chosen.length && (
+        <Card quiet><p className="text-[13px] py-6 text-center" style={{ color: 'var(--ink-4)' }}>
+          Pick something in a slot above, or use the compare icon on any row of the Performance table.
+        </p></Card>
+      )}
+    </div>
+  );
+};
+
+/* ===================================================================== */
+/* SEGMENTS — naming taxonomy + Meta breakdowns                           */
+/* ===================================================================== */
+
+const GroupTable = ({ groups, ds, ctrl, fmt, bench, labelHead, showMembers }) => {
+  const getters = useMemo(() => ({
+    name: e => e.name, spend: e => e.m.spend, conv: e => e.m.conv, cpa: e => e.m.cpa,
+    ctr: e => e.m.ctr, cvr: e => e.m.cvr, cpm: e => e.m.cpm, waste: e => e.waste,
+  }), []);
+  const { sorted, sort, setSort } = useSort(groups, { key: 'spend', dir: 'desc' }, getters);
+  return (
+    <div className="card overflow-hidden">
+      <div className="overflow-auto scroll" style={{ maxHeight: '60vh' }}>
+        <table className="tbl">
+          <thead>
+            <tr>
+              <th className="stick" style={{ textAlign: 'left', minWidth: 200 }}>{labelHead}</th>
+              <SortHead label="Call" k="verdict" sort={sort} setSort={setSort} align="left" tip="The same verdict rules applied to the group as a whole." />
+              <SortHead label="Spend" k="spend" sort={sort} setSort={setSort} tip="Combined spend of everything in this group." />
+              <SortHead label={ds.convLabel} k="conv" sort={sort} setSort={setSort} tip="Combined conversions." />
+              <SortHead label="Cost / result" k="cpa" sort={sort} setSort={setSort} tip="Group spend ÷ group conversions. Grouping is what gives small entities enough volume for a trustworthy figure." />
+              <SortHead label="CPM" k="cpm" sort={sort} setSort={setSort} tip="Auction cost for this group." />
+              <SortHead label="CTR" k="ctr" sort={sort} setSort={setSort} tip="Creative strength for this group." />
+              <SortHead label="CVR" k="cvr" sort={sort} setSort={setSort} tip="Post-click strength for this group." />
+              <SortHead label="Over target" k="waste" sort={sort} setSort={setSort} tip="Spend above what target efficiency would have cost." />
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map(g => (
+              <tr key={g.key}>
+                <td className="stick" style={{ textAlign: 'left' }}>
+                  <div className="font-semibold truncate max-w-[240px]" title={g.name}>{g.name}</div>
+                  {showMembers && g.members !== undefined && (
+                    <div className="text-[10px] num" style={{ color: 'var(--ink-4)' }}>
+                      {g.members} {ctrl.level === 'ad' ? 'ads' : ctrl.level === 'adset' ? 'ad sets' : 'campaigns'}
+                    </div>
+                  )}
+                </td>
+                <td style={{ textAlign: 'left' }}>
+                  <Tip tip={g.reason}><span className="help" style={{ borderBottom: 'none' }}><Badge verdict={g.verdict} /></span></Tip>
+                </td>
+                <td className="num">{fmt.money0(g.m.spend)}</td>
+                <td className="num">{fmt.int(g.m.conv)}</td>
+                <td className="num font-semibold" style={{ color: g.m.cpa === null ? 'var(--ink-4)' : g.m.cpa > ctrl.targetCpa ? 'var(--bad)' : 'var(--good)' }}>
+                  {fmt.money(g.m.cpa)}
+                </td>
+                <td><div className="num">{fmt.money(g.m.cpm)}</div><VsBench value={g.m.cpm} bench={bench.cpm} higherIsBetter={false} /></td>
+                <td><div className="num">{fmt.pct(g.m.ctr)}</div><VsBench value={g.m.ctr} bench={bench.ctr} /></td>
+                <td><div className="num">{fmt.pct(g.m.cvr)}</div><VsBench value={g.m.cvr} bench={bench.cvr} /></td>
+                <td className="num" style={{ color: g.waste > 0 ? 'var(--warn)' : 'var(--ink-4)' }}>{g.waste > 0 ? fmt.money0(g.waste) : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+const SegmentsView = ({ ds, ctrl, fmt, filters }) => {
+  const entities = useMemo(() => aggregate(ds, { level: ctrl.level, filters }), [ds, ctrl.level, filters]);
+  const naming = useMemo(() => analyseNaming(entities), [entities]);
+  const [mode, setMode] = useState(null);
+
+  const modes = useMemo(() => {
+    const m = naming.dimensions.map(d => ({ ...d, source: 'name' }));
+    ds.breakdowns.forEach(b => m.push({
+      id: `b:${b}`, kind: 'breakdown', label: b, exclusive: true, source: 'meta',
+    }));
+    return m;
+  }, [naming, ds.breakdowns]);
+
+  useEffect(() => { if (modes.length && !modes.some(m => m.id === mode)) setMode(modes[0].id); }, [modes, mode]);
+  const active = modes.find(m => m.id === mode);
+
+  const result = useMemo(() => {
+    if (!active) return null;
+    let raw;
+    if (active.kind === 'breakdown') {
+      raw = aggregate(ds, { level: ctrl.level, filters, groupBy: r => r.breakdown?.[active.label] || '(none)' });
+    } else {
+      raw = groupByDimension(entities, active);
+    }
+    const b = buildBenchmarks(raw);
+    return { groups: scoreEntities(raw, b, ds, { ...ctrl }), bench: b };
+  }, [active, ds, ctrl, filters, entities]);
+
+  if (!modes.length) {
+    return (
+      <Card title="Segments" icon={Boxes} quiet>
+        <p className="text-[12.5px] leading-relaxed" style={{ color: 'var(--ink-3)' }}>
+          Nothing to group by yet. Two things create groups here:
+          <br /><br />
+          <b style={{ color: 'var(--ink-2)' }}>Words in your names.</b> Recognisable parts such as Video, Post, Static,
+          BOF, ABO or a quarter become dimensions wherever they appear in the name, and any word that recurs across
+          several {ctrl.level}s becomes a tag you can group by. Words identical on everything, or unique to everything,
+          are skipped because grouping by them tells you nothing.
+          <br /><br />
+          <b style={{ color: 'var(--ink-2)' }}>Meta breakdowns.</b> Export with Breakdown → By Delivery → Age, Gender,
+          Placement or Platform and each appears here.
+        </p>
+      </Card>
+    );
+  }
+
+  const byName = modes.filter(m => m.source === 'name');
+  const byMeta = modes.filter(m => m.source === 'meta');
+
+  return (
+    <div className="anim-in space-y-4">
+      <Card title="Group by" icon={Boxes}
+        right={<Tip tip={`Grouping pools small ${ctrl.level}s until they carry enough conversions to judge. One ad with three conversions tells you nothing; every video ad together might tell you plenty.`}>
+          <span className="chip t-muted help"><Info size={10} />Why group</span></Tip>}>
+        {!!byName.length && (
+          <>
+            <div className="eyebrow mb-2">From the names</div>
+            <div className="flex flex-wrap gap-2">
+              {byName.map(m => (
+                <Tip key={m.id} tip={m.kind === 'tag'
+                  ? <span>Every word that recurs across several {ctrl.level}s. A {ctrl.level} can carry more than one, so these groups <b>overlap</b> and their spend will add up to more than the account total.</span>
+                  : m.kind === 'vocab'
+                    ? <span>Recognised {m.label.toLowerCase()} words found anywhere in the name, on {(m.coverage * 100).toFixed(0)}% of them. {m.values} distinct values.</span>
+                    : <span>Part {m.index + 1} of the name, split on underscores and dashes. {m.values} distinct values across {(m.coverage * 100).toFixed(0)}% of names.</span>}>
+                  <button className={`btn px-3 py-1.5 text-[12px] font-semibold ${mode === m.id ? 'btn-on' : ''}`}
+                    onClick={() => setMode(m.id)}>
+                    {m.label}<span className="ml-1.5 opacity-60 num">{m.values}</span>
+                    {!m.exclusive && <span className="ml-1.5 opacity-70">overlapping</span>}
+                  </button>
+                </Tip>
+              ))}
+            </div>
+          </>
+        )}
+        {!!byMeta.length && (
+          <>
+            <div className="eyebrow mb-2 mt-4">From Meta breakdowns</div>
+            <div className="flex flex-wrap gap-2">
+              {byMeta.map(m => (
+                <button key={m.id} className={`btn px-3 py-1.5 text-[12px] font-semibold ${mode === m.id ? 'btn-on' : ''}`}
+                  onClick={() => setMode(m.id)}>{m.label}</button>
+              ))}
+            </div>
+          </>
+        )}
+      </Card>
+
+      {active && !active.exclusive && (
+        <div className="card card-quiet px-4 py-3 flex items-start gap-2.5">
+          <AlertTriangle size={15} className="shrink-0 mt-0.5" style={{ color: 'var(--warn)' }} />
+          <p className="text-[11.5px] leading-relaxed" style={{ color: 'var(--ink-3)' }}>
+            These groups overlap. An ad named <span className="num">Lucy_IG_01 - Post</span> counts under both
+            <span className="num"> IG</span> and <span className="num"> Post</span>, so the spend column adds up to more
+            than the account total. Read each row on its own; do not add them together.
+          </p>
+        </div>
+      )}
+
+      {result && (
+        <GroupTable groups={result.groups} ds={ds} ctrl={ctrl} fmt={fmt} bench={result.bench}
+          labelHead={active.label} showMembers={active.source === 'name'} />
+      )}
+      <p className="text-[11px]" style={{ color: 'var(--ink-4)' }}>
+        Cost figures here come from each group's combined totals, never from averaging its members' rates.
+      </p>
+    </div>
+  );
+};
+
+/* ===================================================================== */
+/* CHANGE — first half vs second half                                     */
+/* ===================================================================== */
+
+const ChangeView = ({ ds, ctrl, fmt, filters }) => {
+  const mid = useMemo(() => {
+    if (!ds.dateRange.start || !ds.dateRange.end) return null;
+    const a = new Date(ds.dateRange.start + 'T00:00:00Z').getTime();
+    const b = new Date(ds.dateRange.end + 'T00:00:00Z').getTime();
+    return new Date((a + b) / 2).toISOString().slice(0, 10);
+  }, [ds.dateRange]);
+  const [split, setSplit] = useState(mid);
+  useEffect(() => setSplit(mid), [mid]);
+
+  const rows = useMemo(() => split ? comparePeriods(ds, ctrl.level, split, filters) : [], [ds, ctrl.level, split, filters]);
+
+  if (ds.timeGrain === 'lifetime') {
+    return (
+      <Card title="Change over time" icon={History} quiet>
+        <div className="flex items-start gap-3 text-[12.5px]" style={{ color: 'var(--ink-3)' }}>
+          <Info size={16} className="shrink-0 mt-0.5" style={{ color: 'var(--warn)' }} />
+          <span>Comparing periods needs day-level rows. Re-export with <b style={{ color: 'var(--ink-2)' }}>Breakdown → By
+            Time → Day</b>, or load a second file covering the earlier period and switch between them.</span>
+        </div>
+      </Card>
+    );
+  }
+
+  const Delta = ({ v, invert }) => {
+    if (v === null || !isFinite(v)) return <span style={{ color: 'var(--ink-4)' }}>—</span>;
+    const good = invert ? v < 0 : v > 0;
+    const flat = Math.abs(v) < 0.03;
+    return (
+      <span className="num" style={{ color: flat ? 'var(--ink-4)' : good ? 'var(--good)' : 'var(--bad)' }}>
+        {v > 0 ? '+' : ''}{(v * 100).toFixed(0)}%
+      </span>
+    );
+  };
+
+  const improved = rows.filter(r => r.status === 'both' && r.dCpa !== null && r.dCpa < -0.1 && (r.after?.conv || 0) >= ctrl.minConv);
+  const decayed = rows.filter(r => r.status === 'both' && r.dCpa !== null && r.dCpa > 0.1 && (r.after?.conv || 0) >= ctrl.minConv);
+
+  return (
+    <div className="anim-in space-y-4">
+      <Card title="Split the period" icon={History}
+        right={<input type="date" className="field text-[12px]" value={split || ''} min={ds.dateRange.start}
+          max={ds.dateRange.end} onChange={e => setSplit(e.target.value)} />}>
+        <p className="text-[12px]" style={{ color: 'var(--ink-3)' }}>
+          Everything before {longDate(split)} is the “before”; that date onward is the “after”. Move the date to line the
+          split up with something real — a budget change, a new creative, a promotion — and the table shows what moved with it.
+        </p>
+        <div className="grid sm:grid-cols-2 gap-3 mt-3">
+          <div className="card card-quiet px-4 py-3">
+            <div className="eyebrow mb-1.5" style={{ color: 'var(--good)' }}>Improved</div>
+            {improved.length ? improved.slice(0, 4).map(r => (
+              <div key={r.key} className="flex justify-between gap-3 text-[12px] py-0.5">
+                <span className="truncate" title={r.name}>{r.name}</span>
+                <span className="num shrink-0" style={{ color: 'var(--good)' }}>{(r.dCpa * 100).toFixed(0)}%</span>
+              </div>
+            )) : <span className="text-[12px]" style={{ color: 'var(--ink-4)' }}>Nothing improved materially with enough volume to say so.</span>}
+          </div>
+          <div className="card card-quiet px-4 py-3">
+            <div className="eyebrow mb-1.5" style={{ color: 'var(--bad)' }}>Got worse</div>
+            {decayed.length ? decayed.slice(0, 4).map(r => (
+              <div key={r.key} className="flex justify-between gap-3 text-[12px] py-0.5">
+                <span className="truncate" title={r.name}>{r.name}</span>
+                <span className="num shrink-0" style={{ color: 'var(--bad)' }}>+{(r.dCpa * 100).toFixed(0)}%</span>
+              </div>
+            )) : <span className="text-[12px]" style={{ color: 'var(--ink-4)' }}>Nothing decayed materially with enough volume to say so.</span>}
+          </div>
+        </div>
+      </Card>
+
+      <div className="card overflow-hidden">
+        <div className="overflow-auto scroll" style={{ maxHeight: '60vh' }}>
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th className="stick" style={{ textAlign: 'left', minWidth: 220 }}>{ctrl.level}</th>
+                <th><Tip tip="Spend in the later half compared with the earlier half."><span className="help">Spend</span></Tip></th>
+                <th><Tip tip="Change in spend. Neither direction is good or bad on its own — it is context for the rest of the row."><span className="help">Δ</span></Tip></th>
+                <th><Tip tip="Conversions in the later half."><span className="help">{ds.convLabel}</span></Tip></th>
+                <th><Tip tip="Change in conversion volume."><span className="help">Δ</span></Tip></th>
+                <th><Tip tip="Cost per result in the later half."><span className="help">Cost</span></Tip></th>
+                <th><Tip tip="Change in cost per result. Green means it got cheaper. This is the column that matters most."><span className="help">Δ</span></Tip></th>
+                <th><Tip tip="Change in click-through rate. Falling CTR alongside rising cost is the classic fatigue pattern."><span className="help">Δ CTR</span></Tip></th>
+                <th><Tip tip="Change in post-click conversion rate. Falling here with steady CTR points at the landing page rather than the ad."><span className="help">Δ CVR</span></Tip></th>
+                <th><Tip tip="Change in auction cost per thousand impressions."><span className="help">Δ CPM</span></Tip></th>
+                <th style={{ textAlign: 'left' }}>State</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.key}>
+                  <td className="stick" style={{ textAlign: 'left' }}>
+                    <div className="font-semibold truncate max-w-[240px]" title={r.name}>{r.name}</div>
+                  </td>
+                  <td className="num">{fmt.money0(r.after?.spend ?? 0)}</td>
+                  <td><Delta v={r.dSpend} /></td>
+                  <td className="num">{fmt.int(r.after?.conv ?? 0)}</td>
+                  <td><Delta v={r.dConv} /></td>
+                  <td className="num" style={{ color: (r.after?.cpa ?? 0) > ctrl.targetCpa ? 'var(--bad)' : 'var(--good)' }}>
+                    {fmt.money(r.after?.cpa)}
+                  </td>
+                  <td><Delta v={r.dCpa} invert /></td>
+                  <td><Delta v={r.dCtr} /></td>
+                  <td><Delta v={r.dCvr} /></td>
+                  <td><Delta v={r.dCpm} invert /></td>
+                  <td style={{ textAlign: 'left' }}>
+                    {r.status === 'new' ? <span className="chip t-info">Started</span>
+                      : r.status === 'stopped' ? <span className="chip t-muted">Stopped</span>
+                        : <span className="chip t-neutral">Ran both</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ===================================================================== */
+/* BUDGET SIMULATOR                                                       */
+/* ===================================================================== */
+
+const BudgetView = ({ ds, scored, bench, ctrl, fmt }) => {
+  const [changes, setChanges] = useState({});
+  const [decay, setDecay] = useState(0.15);
+  const sim = useMemo(() => simulateReallocation(scored, changes, { decayPerDouble: decay }), [scored, changes, decay]);
+
+  const suggest = () => {
+    const next = {};
+    const winners = scored.filter(e => ['scale', 'starve'].includes(e.verdict)).sort((a, b) => a.m.cpa - b.m.cpa);
+    scored.filter(e => e.verdict === 'cut').forEach(e => { next[e.key] = 0; });
+    const freed = scored.filter(e => e.verdict === 'cut').reduce((s, e) => s + (e.m.cpaSpend || e.m.spend), 0);
+    if (winners.length && freed > 0) {
+      const per = freed / Math.min(winners.length, 3);
+      winners.slice(0, 3).forEach(e => {
+        const base = e.m.cpaSpend || e.m.spend;
+        if (base > 0) next[e.key] = Math.round(((base + per) / base) * 10) / 10;
+      });
+    }
+    setChanges(next);
+  };
+
+  const changedCount = Object.keys(changes).filter(k => changes[k] !== 1).length;
+  const dConv = sim.newConv - sim.curConv;
+
+  return (
+    <div className="anim-in space-y-4">
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <Stat label="Spend now" value={fmt.moneyCompact(sim.curSpend)} sub={`${fmt.int(sim.curConv)} ${ds.convLabel.toLowerCase()}`}
+          tip="On-goal spend and conversions for everything currently in view." />
+        <Stat label="Spend after changes" value={fmt.moneyCompact(sim.newSpend)}
+          sub={`${changedCount} change${changedCount === 1 ? '' : 's'}`}
+          tip="What you would be spending if the multipliers below were applied." />
+        <Stat label={`${ds.convLabel} after`} value={fmt.int(Math.round(sim.newConv))}
+          tone={dConv > 0 ? 'var(--good)' : dConv < 0 ? 'var(--bad)' : undefined}
+          sub={`${dConv >= 0 ? '+' : ''}${Math.round(dConv)} versus now`}
+          tip="Projected conversions, with the efficiency penalty below applied to anything you scale up." />
+        <Stat label="Cost per result after" value={fmt.money(sim.newCpa)}
+          tone={sim.newCpa === null ? undefined : sim.newCpa <= ctrl.targetCpa ? 'var(--good)' : 'var(--bad)'}
+          sub={sim.curCpa ? `now ${fmt.money(sim.curCpa)}` : ''}
+          tip="Projected blended cost per result across the new plan." />
+      </div>
+
+      <Card title="How pessimistic should this be?" icon={SlidersHorizontal}>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+          <div className="flex-1">
+            <div className="flex justify-between text-[11px] mb-1.5">
+              <Tip tip="Doubling a budget almost never keeps the same cost per result: you buy less-responsive audience, competing against yourself in the auction. This is how much worse each doubling gets. 0% is the naive projection almost every media plan quietly assumes — and it is the main reason plans miss.">
+                <span className="help" style={{ color: 'var(--ink-3)' }}>Efficiency lost per doubling of budget</span>
+              </Tip>
+              <span className="num font-bold" style={{ color: 'var(--accent)' }}>{(decay * 100).toFixed(0)}%</span>
+            </div>
+            <input type="range" min={0} max={0.6} step={0.05} value={decay}
+              onChange={e => setDecay(parseFloat(e.target.value))} className="w-full" />
+            <div className="flex justify-between text-[10px] num mt-1" style={{ color: 'var(--ink-4)' }}>
+              <span>0% naive</span><span>15% typical</span><span>60% harsh</span>
+            </div>
+          </div>
+          <div className="flex gap-2 shrink-0">
+            <Tip tip="Zero out everything rated Cut and spread the freed budget across your three most efficient performers, in proportion.">
+              <button className="btn btn-on px-3 py-2 text-[12px] font-semibold inline-flex items-center gap-1.5" onClick={suggest}>
+                <Sparkles size={13} /> Suggest a plan
+              </button>
+            </Tip>
+            <button className="btn px-3 py-2 text-[12px] font-semibold" onClick={() => setChanges({})}>Reset</button>
+          </div>
+        </div>
+      </Card>
+
+      <div className="card overflow-hidden">
+        <div className="overflow-auto scroll" style={{ maxHeight: '55vh' }}>
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th className="stick" style={{ textAlign: 'left', minWidth: 220 }}>{ctrl.level}</th>
+                <th style={{ textAlign: 'left' }}>Call</th>
+                <th>Spend now</th>
+                <th>Cost now</th>
+                <th style={{ textAlign: 'center', minWidth: 190 }}>
+                  <Tip tip="Multiply this entity's budget. Zero switches it off entirely."><span className="help">New budget</span></Tip>
+                </th>
+                <th>Spend after</th>
+                <th><Tip tip="Cost per result after the efficiency penalty is applied to any increase."><span className="help">Cost after</span></Tip></th>
+                <th><Tip tip="Projected conversions at the new budget and cost."><span className="help">Results after</span></Tip></th>
+              </tr>
+            </thead>
+            <tbody>
+              {scored.map(e => {
+                const mult = changes[e.key] ?? 1;
+                const base = e.m.cpaSpend || e.m.spend;
+                const cpa1 = e.m.cpa === null ? null : mult > 1 ? e.m.cpa * (1 + decay * Math.log2(mult)) : e.m.cpa;
+                const spend1 = base * mult;
+                const conv1 = cpa1 && cpa1 > 0 ? spend1 / cpa1 : 0;
+                return (
+                  <tr key={e.key}>
+                    <td className="stick" style={{ textAlign: 'left' }}>
+                      <div className="font-semibold truncate max-w-[240px]" title={e.name}>{e.name}</div>
+                    </td>
+                    <td style={{ textAlign: 'left' }}><Badge verdict={e.verdict} /></td>
+                    <td className="num">{fmt.money0(base)}</td>
+                    <td className="num">{fmt.money(e.m.cpa)}</td>
+                    <td>
+                      <div className="flex items-center gap-2 justify-center">
+                        <input type="range" min={0} max={3} step={0.1} value={mult} style={{ width: 96 }}
+                          onChange={ev => setChanges(c => ({ ...c, [e.key]: parseFloat(ev.target.value) }))} />
+                        <span className="num text-[11px] w-9 text-right"
+                          style={{ color: mult === 0 ? 'var(--bad)' : mult > 1 ? 'var(--good)' : mult < 1 ? 'var(--warn)' : 'var(--ink-4)' }}>
+                          {mult === 0 ? 'off' : `${mult.toFixed(1)}×`}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="num" style={{ color: mult !== 1 ? 'var(--ink)' : 'var(--ink-4)' }}>{fmt.money0(spend1)}</td>
+                    <td className="num" style={{ color: cpa1 && cpa1 > ctrl.targetCpa ? 'var(--bad)' : undefined }}>{fmt.money(cpa1)}</td>
+                    <td className="num">{conv1 ? nf(conv1, 1) : '—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card card-quiet px-4 py-3 flex items-start gap-2.5">
+        <Info size={15} className="shrink-0 mt-0.5" style={{ color: 'var(--info)' }} />
+        <p className="text-[11.5px] leading-relaxed" style={{ color: 'var(--ink-3)' }}>
+          This is arithmetic on past performance, not a forecast. It assumes each entity keeps working the way it has,
+          which is least true exactly where you are most tempted to believe it — the winner you want to triple. Treat the
+          projection as a ceiling, move budgets in steps of twenty or thirty percent, and re-read the numbers before the
+          next step. Anything switched off also loses its learning, so switching it back on later is not free.
+        </p>
+      </div>
+    </div>
+  );
+};
+
+/* ===================================================================== */
+/* APP SHELL                                                              */
+/* ===================================================================== */
+
+const NAV = [
+  { id: 'files', label: 'Exports', icon: Database },
+  { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+  { id: 'performance', label: 'Performance', icon: Table2 },
+  { id: 'compare', label: 'Compare', icon: GitCompare },
+  { id: 'segments', label: 'Segments', icon: Boxes },
+  { id: 'change', label: 'Change', icon: History },
+  { id: 'budget', label: 'Budget', icon: Wallet },
+];
+
+export default function App() {
+  const [theme, setTheme] = useStored('mv_theme', 'dark');
+  const [files, setFiles] = useState([]);
+  const [activeId, setActiveId] = useStored('mv_active', null);
+  const [tab, setTab] = useState('files');
+  const [picks, setPicks] = useState([]);
+  const [ctrlStore, setCtrlStore] = useStored('mv_ctrl', { targetCpa: 30, minConv: 5, fatigueFreq: 2.5, grain: 'day' });
+  const [level, setLevel] = useState(null);
+  const [search, setSearch] = useState('');
+  const [indicator, setIndicator] = useState('');
+  const [range, setRange] = useState({ from: '', to: '' });
+  const [delivery, setDelivery] = useState('');
+
+  useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+
+  /* --- persistence --- */
+  useEffect(() => {
+    let dead = false;
+    store.all().then(list => {
+      if (dead || !list.length) return;
+      const restored = [];
+      for (const rec of list.sort((a, b) => a.addedAt - b.addedAt)) {
+        try { restored.push({ id: rec.id, name: rec.name, addedAt: rec.addedAt, ds: parseMetaCSV(rec.text, rec.name) }); }
+        catch { /* a file that no longer parses is dropped silently */ }
+      }
+      if (!restored.length) return;
+      setFiles(restored);
+      setActiveId(prev => restored.some(f => f.id === prev) ? prev : restored[0].id);
+      setTab('overview');
+    }).catch(() => {});
+    return () => { dead = true; };
+  }, []);
+
+  const addFile = (ds, text) => {
+    const id = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+    setFiles(prev => {
+      const names = new Set(prev.map(f => f.name));
+      let name = ds.fileName.replace(/^\d{8,}[_-]/, '').replace(/-\d{1,2}-[A-Za-z]{3}-\d{4}-\d{1,2}-[A-Za-z]{3}-\d{4}$/, ''); let n = 2;
+      while (names.has(name)) name = `${ds.fileName} (${n++})`;
+      store.put({ id, name, text, addedAt: Date.now() });
+      return [...prev, { id, name, addedAt: Date.now(), ds }];
+    });
+    setActiveId(id);
+  };
+  const removeFile = (id) => {
+    store.del(id);
+    setFiles(prev => {
+      const next = prev.filter(f => f.id !== id);
+      if (id === activeId) setActiveId(next[0]?.id || null);
+      return next;
+    });
+  };
+  const renameFile = (id, name) => setFiles(prev => prev.map(f => {
+    if (f.id !== id) return f;
+    store.all().then(all => {
+      const rec = all.find(r => r.id === id);
+      if (rec) store.put({ ...rec, name });
+    }).catch(() => {});
+    return { ...f, name };
+  }));
+
+  const active = files.find(f => f.id === activeId) || null;
+  const ds = active?.ds || null;
+  const fmt = useMemo(() => makeFmt(ds), [ds]);
+
+  /* --- level defaults to the finest available in this file --- */
+  useEffect(() => {
+    if (!ds) return;
+    // Always drop to the finest level the new file supports. Carrying a
+    // coarser choice over from a previous export silently hides the detail
+    // the user just loaded.
+    setLevel(ds.finestLevel);
+    setIndicator('');
+    setDelivery('');
+    setRange({ from: '', to: '' });
+    setPicks([]);
+    // A name filter left over from another export makes the new one look
+    // empty with no visible cause.
+    setSearch('');
+  }, [ds]);
+
+  // A fresh object literal here would give every downstream memo a new
+  // dependency on every keystroke, re-scoring 25k rows as the user types.
+  const ctrl = useMemo(() => ({ ...ctrlStore, level: level || ds?.finestLevel || 'campaign' }),
+    [ctrlStore, level, ds]);
+  const filters = useMemo(() => ({
+    dateFrom: range.from || undefined, dateTo: range.to || undefined,
+    indicator: indicator || undefined, search: search || undefined,
+    delivery: delivery || undefined,
+  }), [range, indicator, search, delivery]);
+
+  const entities = useMemo(() => ds ? aggregate(ds, { level: ctrl.level, filters }) : [], [ds, ctrl.level, filters]);
+  // Benchmarks come from the unfiltered account so a search cannot move
+  // the yardstick an entity is being judged against.
+  const benchBase = useMemo(() => ds ? aggregate(ds, {
+    level: ctrl.level, filters: { dateFrom: range.from || undefined, dateTo: range.to || undefined, indicator: indicator || undefined, delivery: delivery || undefined },
+  }) : [], [ds, ctrl.level, range, indicator, delivery]);
+  const bench = useMemo(() => buildBenchmarks(benchBase), [benchBase]);
+  const scored = useMemo(() => ds ? scoreEntities(entities, bench, ds, ctrl) : [], [entities, bench, ds, ctrl]);
+  const scoredAll = useMemo(() => ds ? scoreEntities(benchBase, bench, ds, ctrl) : [], [benchBase, bench, ds, ctrl]);
+  const findings = useMemo(() => ds ? generateFindings(scoredAll, bench, ds, ctrl) : [], [scoredAll, bench, ds, ctrl]);
+  const series = useMemo(() => ds ? entitySeries(ds, ctrl.level, filters) : new Map(), [ds, ctrl.level, filters]);
+
+  const deliveryOptions = useMemo(() => {
+    if (!ds) return [];
+    const set = new Set();
+    ds.rows.forEach(r => { if (r.delivery && r.delivery !== '0') set.add(r.delivery.toLowerCase()); });
+    return [...set].sort();
+  }, [ds]);
+
+  const focus = (key) => { setSearch(key); setTab('performance'); };
+  const addCompare = (key) => {
+    setPicks(p => p.includes(key) ? p : [...p, key].slice(-4));
+    setTab('compare');
+  };
+
+  const NavBtn = ({ id, label, icon: Icon }) => {
+    const on = tab === id;
+    const disabled = !ds && id !== 'files';
+    return (
+      <button disabled={disabled} onClick={() => setTab(id)}
+        className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl border text-[13px] font-medium transition-colors ${on ? '' : 'border-transparent'}`}
+        style={{
+          borderColor: on ? 'color-mix(in srgb, var(--accent) 30%, transparent)' : 'transparent',
+          background: on ? 'color-mix(in srgb, var(--accent) 8%, transparent)' : 'transparent',
+          color: disabled ? 'var(--ink-4)' : on ? 'var(--ink)' : 'var(--ink-3)',
+          opacity: disabled ? 0.45 : 1, cursor: disabled ? 'not-allowed' : 'pointer',
+        }}>
+        <span className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border"
+          style={on
+            ? { background: 'linear-gradient(135deg, var(--accent), var(--accent-2))', borderColor: 'transparent', color: '#fff' }
+            : { background: 'var(--panel-lo)', borderColor: 'var(--edge)', color: 'inherit' }}>
+          <Icon size={15} strokeWidth={2.2} />
+        </span>
+        <span className={on ? 'font-semibold' : ''}>{label}</span>
+        {id === 'files' && files.length > 0 && (
+          <span className="ml-auto num text-[10px] px-1.5 rounded" style={{ background: 'var(--hover)', color: 'var(--ink-4)' }}>
+            {files.length}
+          </span>
+        )}
+      </button>
+    );
+  };
+
+  return (
+    <ThemeCtx.Provider value={theme}>
+      <div className="min-h-screen flex">
+        <aside className="fixed inset-y-0 left-0 w-[228px] hidden md:flex flex-col z-30"
+          style={{ background: 'var(--sticky)', borderRight: '1px solid var(--edge)' }}>
+          <div className="px-4 py-5">
+            <div className="flex items-center gap-2.5">
+              <span className="w-8 h-8 rounded-xl flex items-center justify-center"
+                style={{ background: 'linear-gradient(135deg, var(--accent), var(--accent-2))' }}>
+                <Gauge size={17} className="text-white" />
+              </span>
+              <div>
+                <div className="font-bold leading-none">Meta<span style={{ color: 'var(--ink-3)', fontWeight: 300 }}>Vision</span></div>
+                <div className="eyebrow mt-1" style={{ letterSpacing: '0.14em' }}>Decision engine</div>
+              </div>
+            </div>
+          </div>
+          <nav className="flex-1 px-3 space-y-1 overflow-y-auto scroll">
+            {NAV.map(n => <NavBtn key={n.id} {...n} />)}
+          </nav>
+          <div className="p-3">
+            <div className="card card-quiet px-3 py-2.5 flex items-center gap-2">
+              <div className="flex-1 min-w-0">
+                <div className="text-[11px] font-semibold truncate">{active ? active.name : 'No export loaded'}</div>
+                <div className="text-[10px]" style={{ color: 'var(--ink-4)' }}>Processed in this browser</div>
+              </div>
+              <Tip tip={`Switch to the ${theme === 'dark' ? 'light' : 'dark'} theme.`}>
+                <button className="btn p-1.5" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label="Toggle theme">
+                  {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+                </button>
+              </Tip>
+            </div>
+          </div>
+        </aside>
+
+        <main className="flex-1 md:ml-[228px] min-w-0">
+          {/* control bar */}
+          <div className="sticky top-0 z-20 px-4 md:px-7 py-3"
+            style={{ background: 'color-mix(in srgb, var(--bg) 88%, transparent)', backdropFilter: 'blur(12px)', borderBottom: '1px solid var(--edge)' }}>
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <div className="md:hidden seg">
+                {NAV.map(n => <button key={n.id} aria-pressed={tab === n.id} onClick={() => setTab(n.id)}
+                  disabled={!ds && n.id !== 'files'} className="px-2"><n.icon size={14} /></button>)}
+              </div>
+
+              {ds && (
+                <>
+                  {ds.levelsPresent.length > 1 && (
+                    <Tip tip="Which level of the account to analyse. Ad-level data rolls up into ad sets and campaigns, so an ad-level export can answer all three; the reverse is not true.">
+                      <div className="seg">
+                        {ds.levelsPresent.map(l => (
+                          <button key={l} aria-pressed={ctrl.level === l} onClick={() => { setLevel(l); setPicks([]); }}>
+                            {l === 'adset' ? 'Ad sets' : l === 'ad' ? 'Ads' : 'Campaigns'}
+                          </button>
+                        ))}
+                      </div>
+                    </Tip>
+                  )}
+
+                  <Tip tip={`Everything is judged against this. Set it to what a ${ds.convLabel.toLowerCase().replace(/s$/, '')} is actually worth to you — for a booking, that is usually the value of the booking times your margin.`}>
+                    <label className="flex items-center gap-1.5 field py-1.5 px-2.5 cursor-help">
+                      <Target size={13} style={{ color: 'var(--accent)' }} />
+                      <span className="text-[11px]" style={{ color: 'var(--ink-3)' }}>Target</span>
+                      <span className="num text-[12px]">{fmt.sym}</span>
+                      <input type="number" min={0} step={1} value={ctrlStore.targetCpa}
+                        onChange={e => setCtrlStore({ ...ctrlStore, targetCpa: Math.max(0, parseFloat(e.target.value) || 0) })}
+                        className="num bg-transparent w-14 text-[12px] focus:outline-none" style={{ color: 'var(--ink)' }} />
+                    </label>
+                  </Tip>
+
+                  <Tip tip="How many conversions an entity needs before its cost figure is treated as a real read rather than noise. Below this it is labelled “No read” instead of being praised or condemned.">
+                    <label className="flex items-center gap-1.5 field py-1.5 px-2.5 cursor-help">
+                      <span className="text-[11px]" style={{ color: 'var(--ink-3)' }}>Min results</span>
+                      <input type="number" min={1} step={1} value={ctrlStore.minConv}
+                        onChange={e => setCtrlStore({ ...ctrlStore, minConv: Math.max(1, parseInt(e.target.value) || 1) })}
+                        className="num bg-transparent w-9 text-[12px] focus:outline-none" style={{ color: 'var(--ink)' }} />
+                    </label>
+                  </Tip>
+
+                  {ds.indicators.length > 1 && (
+                    <Tip tip="Isolate one optimisation goal. Results mean something different under each, so comparing across them is not meaningful.">
+                      <select className="field text-[12px] py-1.5" value={indicator} onChange={e => setIndicator(e.target.value)}>
+                        <option value="">All goals</option>
+                        {ds.indicators.map(i => <option key={i} value={i}>{i}</option>)}
+                      </select>
+                    </Tip>
+                  )}
+
+                  {!!deliveryOptions.length && (
+                    <Tip tip="Ads Manager keeps paused, archived and no-longer-delivering entities in the export, and their historical spend is still in these numbers. Filter to active to see only what is live now.">
+                      <select className="field text-[12px] py-1.5" value={delivery} onChange={e => setDelivery(e.target.value)}>
+                        <option value="">Any status</option>
+                        {deliveryOptions.map(d => <option key={d} value={d}>{d.replace(/_/g, ' ')}</option>)}
+                      </select>
+                    </Tip>
+                  )}
+
+                  {ds.timeGrain !== 'lifetime' && (
+                    <Tip tip="Narrow the period. Leave both blank for everything in the file.">
+                      <span className="flex items-center gap-1">
+                        <input type="date" className="field text-[11px] py-1.5" value={range.from}
+                          min={ds.dateRange.start} max={ds.dateRange.end}
+                          onChange={e => setRange(r => ({ ...r, from: e.target.value }))} />
+                        <span style={{ color: 'var(--ink-4)' }}>→</span>
+                        <input type="date" className="field text-[11px] py-1.5" value={range.to}
+                          min={ds.dateRange.start} max={ds.dateRange.end}
+                          onChange={e => setRange(r => ({ ...r, to: e.target.value }))} />
+                      </span>
+                    </Tip>
+                  )}
+
+                  <label className="flex items-center gap-1.5 field py-1.5 px-2.5 flex-1 min-w-[150px] max-w-[300px]">
+                    <Search size={13} style={{ color: 'var(--ink-4)' }} />
+                    <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Filter by name"
+                      className="bg-transparent text-[12px] w-full focus:outline-none" style={{ color: 'var(--ink)' }} />
+                    {search && <button onClick={() => setSearch('')} aria-label="Clear filter"><X size={12} /></button>}
+                  </label>
+
+                  {files.length > 1 && (
+                    <Tip tip="Switch between loaded exports. Each keeps its own structure, currency and warnings.">
+                      <select className="field text-[12px] py-1.5 max-w-[170px] truncate" value={activeId || ''}
+                        onChange={e => setActiveId(e.target.value)}>
+                        {files.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                      </select>
+                    </Tip>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+
+          <div className="px-4 md:px-7 py-6 pb-20 max-w-[1500px]">
+            {tab !== 'files' && ds && (
+              <header className="mb-5">
+                <div className="eyebrow mb-1.5">
+                  {ds.currency} · {ctrl.level === 'ad' ? 'Ad level' : ctrl.level === 'adset' ? 'Ad set level' : 'Campaign level'}
+                  {ds.dateRange.start ? ` · ${longDate(ds.dateRange.start)} → ${longDate(ds.dateRange.end)}` : ' · lifetime totals'}
+                </div>
+                <h1 className="text-[26px] font-light leading-tight">
+                  {tab === 'overview' && <>What is <span className="font-bold">working</span></>}
+                  {tab === 'performance' && <>Every <span className="font-bold">{ctrl.level === 'ad' ? 'ad' : ctrl.level === 'adset' ? 'ad set' : 'campaign'}</span>, judged</>}
+                  {tab === 'compare' && <>Head to <span className="font-bold">head</span></>}
+                  {tab === 'segments' && <>Patterns across <span className="font-bold">segments</span></>}
+                  {tab === 'change' && <>What <span className="font-bold">changed</span></>}
+                  {tab === 'budget' && <>Where the <span className="font-bold">budget</span> should go</>}
+                </h1>
+              </header>
+            )}
+
+            {tab === 'files' && (
+              <IngestionView files={files} activeId={activeId} onAdd={addFile} onRemove={removeFile}
+                onRename={renameFile} onSelect={(id) => { setActiveId(id); setTab('overview'); }} />
+            )}
+            {!ds && tab !== 'files' && (
+              <Card quiet><p className="text-[13px] py-8 text-center" style={{ color: 'var(--ink-4)' }}>
+                Load an export first.</p></Card>
+            )}
+            {ds && tab === 'overview' && (
+              <OverviewView ds={ds} entities={entities} scored={scored} bench={bench} findings={findings}
+                ctrl={ctrl} fmt={fmt} onFocus={focus} series={series} />
+            )}
+            {ds && tab === 'performance' && (
+              <PerformanceView ds={ds} scored={scored} bench={bench} ctrl={ctrl} fmt={fmt}
+                series={series} onFocus={focus} onCompare={addCompare} />
+            )}
+            {ds && tab === 'compare' && (
+              <CompareView ds={ds} scored={scoredAll} bench={bench} ctrl={ctrl} fmt={fmt}
+                picks={picks} setPicks={setPicks} series={series} />
+            )}
+            {ds && tab === 'segments' && (
+              <SegmentsView ds={ds} ctrl={ctrl} fmt={fmt} filters={filters} />
+            )}
+            {ds && tab === 'change' && (
+              <ChangeView ds={ds} ctrl={ctrl} fmt={fmt} filters={filters} />
+            )}
+            {ds && tab === 'budget' && (
+              <BudgetView ds={ds} scored={scored} bench={bench} ctrl={ctrl} fmt={fmt} />
+            )}
+          </div>
+        </main>
+      </div>
+    </ThemeCtx.Provider>
   );
 }
