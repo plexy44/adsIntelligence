@@ -75,7 +75,7 @@ const Card = ({ children, title, icon: Icon, right, className = '', pad = true, 
 
 const Stat = ({ label, value, sub, tone, tip, delta }) => (
   <Tip tip={tip} className="block h-full">
-    <div className="card h-full px-5 py-4 flex flex-col justify-between" style={{ cursor: tip ? 'help' : 'default' }}>
+    <div className="card card-lift h-full px-5 py-4 flex flex-col justify-between" style={{ cursor: tip ? 'help' : 'default' }}>
       <div className="flex items-start justify-between gap-2">
         <span className="eyebrow leading-relaxed">{label}</span>
         {delta !== undefined && delta !== null && isFinite(delta) && (
@@ -561,7 +561,7 @@ const OverviewView = ({ ds, entities, scored, bench, findings, ctrl, fmt, onFocu
               const st = FINDING_STYLE[f.kind] || FINDING_STYLE.measurement;
               const Icon = st.icon;
               return (
-                <div key={i} className="card card-quiet px-4 py-3.5">
+                <div key={i} className="card card-quiet card-lift px-4 py-3.5">
                   <div className="flex items-start gap-3">
                     <span className={`chip ${st.tone} shrink-0`} style={{ padding: 5 }}><Icon size={12} /></span>
                     <div className="min-w-0">
@@ -1157,6 +1157,20 @@ const PerformanceView = ({ ds, scored, bench, ctrl, fmt, series, onFocus, onComp
 
 const CompareView = ({ ds, scored, bench, ctrl, fmt, picks, setPicks, series }) => {
   const options = scored.map(e => e.key);
+  /* Open on the four biggest spenders rather than four empty slots. An empty
+     state here is a dead end: the whole point of the view is the comparison,
+     and the top four by spend are what anyone would pick first anyway. Only
+     fills on arrival, so deliberately clearing a slot is respected. */
+  const seeded = useRef(null);
+  useEffect(() => {
+    const stamp = `${ds.fileName}|${ctrl.level}`;
+    if (seeded.current === stamp) return;
+    if (!scored.length) return;
+    seeded.current = stamp;
+    const valid = picks.filter(k => scored.some(e => e.key === k));
+    if (valid.length) return;
+    setPicks(scored.slice().sort((x, y) => y.m.spend - x.m.spend).slice(0, 4).map(e => e.key));
+  }, [ds.fileName, ctrl.level, scored, picks, setPicks]);
   const chosen = picks.map(k => scored.find(e => e.key === k)).filter(Boolean);
   const COLORS = ['var(--accent)', 'var(--teal)', 'var(--bad)', 'var(--warn)'];
 
@@ -1204,19 +1218,34 @@ const CompareView = ({ ds, scored, bench, ctrl, fmt, picks, setPicks, series }) 
     <div className="anim-in space-y-4">
       <Card title="Choose up to four to line up" icon={GitCompare}>
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {[0, 1, 2, 3].map(i => (
-            <div key={i}>
-              <div className="flex items-center gap-1.5 mb-1.5">
-                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: COLORS[i] }} />
-                <span className="eyebrow">Slot {i + 1}</span>
+          {[0, 1, 2, 3].map(i => {
+            const chosen = scored.find(e => e.key === picks[i]);
+            return (
+              <div key={i} className="card card-quiet px-3 py-2.5"
+                style={picks[i] ? { borderColor: `color-mix(in srgb, ${COLORS[i]} 42%, var(--edge))` } : undefined}>
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0"
+                    style={{ background: COLORS[i], boxShadow: `0 0 0 3px color-mix(in srgb, ${COLORS[i]} 20%, transparent)` }} />
+                  <span className="eyebrow">Slot {i + 1}</span>
+                  {chosen && <span className="ml-auto"><Badge verdict={chosen.verdict} /></span>}
+                </div>
+                <select className="field w-full text-[12px]" value={picks[i] || ''}
+                  onChange={e => { const n = [...picks]; n[i] = e.target.value || undefined; setPicks(n.filter((x, ix) => x || ix < 4)); }}>
+                  <option value="">Empty slot</option>
+                  {options.map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+                {chosen && (
+                  <div className="flex items-baseline justify-between mt-2 text-[11px]">
+                    <span className="num" style={{ color: 'var(--ink-4)' }}>{fmt.money0(chosen.m.spend)}</span>
+                    <span className="num font-semibold"
+                      style={{ color: chosen.m.cpa === null ? 'var(--ink-4)' : chosen.m.cpa <= ctrl.targetCpa ? 'var(--good)' : 'var(--bad)' }}>
+                      {fmt.money(chosen.m.cpa)}
+                    </span>
+                  </div>
+                )}
               </div>
-              <select className="field w-full text-[12px]" value={picks[i] || ''}
-                onChange={e => { const n = [...picks]; n[i] = e.target.value || undefined; setPicks(n.filter((x, ix) => x || ix < 4)); }}>
-                <option value="">none</option>
-                {options.map(o => <option key={o} value={o}>{o}</option>)}
-              </select>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </Card>
 
@@ -1365,7 +1394,7 @@ const CompareView = ({ ds, scored, bench, ctrl, fmt, picks, setPicks, series }) 
 
       {!chosen.length && (
         <Card quiet><p className="text-[13px] py-6 text-center" style={{ color: 'var(--ink-4)' }}>
-          Pick something in a slot above, or use the compare icon on any row of the Performance table.
+          Every slot is empty. Choose something above, or use the compare icon on any row of the Performance table.
         </p></Card>
       )}
     </div>
@@ -1873,7 +1902,12 @@ const BudgetView = ({ ds, scored, bench, ctrl, fmt }) => {
 
 // Bumped on every delivery. If the sidebar does not show this string, the
 // browser is still running an older bundle.
-const BUILD = 'build 2.4 · 2026-08-06';
+/* Builds carry a name so a screenshot can be placed at a glance. The date
+   beside it is today's, read at load, so it always reflects the session
+   rather than whenever the bundle happened to be compiled. */
+const BUILD = { version: '2.5', name: 'Lucent' };
+const todayLabel = () => new Date().toLocaleDateString('en-GB',
+  { day: '2-digit', month: 'short', year: 'numeric' });
 
 const NAV = [
   { id: 'files', label: 'Exports', icon: Database },
@@ -2012,18 +2046,16 @@ export default function App() {
     const on = tab === id;
     const disabled = !ds && id !== 'files';
     return (
-      <button disabled={disabled} onClick={() => setTab(id)}
-        className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl border text-[13px] font-medium transition-colors ${on ? '' : 'border-transparent'}`}
+      <button disabled={disabled} onClick={() => setTab(id)} data-on={on ? 'true' : 'false'}
+        className="nav-item w-full flex items-center gap-2.5 px-2.5 py-2 rounded-2xl border text-[13px] font-medium"
         style={{
-          borderColor: on ? 'color-mix(in srgb, var(--accent) 30%, transparent)' : 'transparent',
-          background: on ? 'color-mix(in srgb, var(--accent) 8%, transparent)' : 'transparent',
+          borderColor: on ? 'color-mix(in srgb, var(--accent) 26%, transparent)' : 'transparent',
+          background: on ? 'color-mix(in srgb, var(--accent) 9%, transparent)' : 'transparent',
           color: disabled ? 'var(--ink-4)' : on ? 'var(--ink)' : 'var(--ink-3)',
-          opacity: disabled ? 0.45 : 1, cursor: disabled ? 'not-allowed' : 'pointer',
+          opacity: disabled ? 0.4 : 1, cursor: disabled ? 'not-allowed' : 'pointer',
         }}>
-        <span className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border"
-          style={on
-            ? { background: 'linear-gradient(135deg, var(--accent), var(--accent-2))', borderColor: 'transparent', color: 'var(--on-accent)' }
-            : { background: 'var(--panel-lo)', borderColor: 'var(--edge)', color: 'inherit' }}>
+        <span className="nav-tile w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border"
+          style={on ? { color: 'var(--on-accent)' } : { background: 'var(--glass-2)', borderColor: 'var(--edge)', color: 'inherit' }}>
           <Icon size={15} strokeWidth={2.2} />
         </span>
         <span className={on ? 'font-semibold' : ''}>{label}</span>
@@ -2038,19 +2070,31 @@ export default function App() {
 
   return (
     <ThemeCtx.Provider value={theme}>
-      <div className="min-h-screen flex">
-        <aside className="fixed inset-y-0 left-0 w-[228px] hidden md:flex flex-col z-30"
-          style={{ background: 'var(--sticky)', borderRight: '1px solid var(--edge)' }}>
+      <div className="min-h-screen flex relative">
+        <div className="ambient" aria-hidden />
+        <aside className="fixed inset-y-0 left-0 w-[236px] hidden md:flex flex-col z-30"
+          style={{
+            background: 'color-mix(in srgb, var(--sticky) 72%, transparent)',
+            borderRight: '1px solid var(--edge)',
+            backdropFilter: 'blur(26px) saturate(160%)',
+            WebkitBackdropFilter: 'blur(26px) saturate(160%)',
+          }}>
           <div className="px-4 py-5">
             <div className="flex items-center gap-2.5">
-              <span className="w-8 h-8 rounded-xl flex items-center justify-center"
-                style={{ background: 'linear-gradient(135deg, var(--accent), var(--accent-2))' }}>
+              <span className="w-9 h-9 rounded-2xl flex items-center justify-center shrink-0"
+                style={{
+                  background: 'linear-gradient(135deg, var(--accent), var(--accent-2))',
+                  boxShadow: '0 10px 24px -12px color-mix(in srgb, var(--accent) 90%, transparent), inset 0 1px 0 rgba(255,255,255,.35)',
+                }}>
                 <Gauge size={17} style={{ color: 'var(--on-accent)' }} />
               </span>
               <div>
                 <div className="font-bold leading-none">Meta<span style={{ color: 'var(--ink-3)', fontWeight: 300 }}>Vision</span></div>
                 <div className="eyebrow mt-1" style={{ letterSpacing: '0.14em' }}>Decision engine</div>
-                <div className="num text-[9px] mt-0.5" style={{ color: 'var(--ink-4)' }}>{BUILD}</div>
+                <div className="num text-[9px] mt-1 leading-tight" style={{ color: 'var(--ink-4)' }}>
+                  <span style={{ color: 'var(--accent)' }}>{BUILD.name}</span> v{BUILD.version}
+                  <br />{todayLabel()}
+                </div>
               </div>
             </div>
           </div>
@@ -2072,10 +2116,16 @@ export default function App() {
           </div>
         </aside>
 
-        <main className="flex-1 md:ml-[228px] min-w-0">
+        <main className="flex-1 md:ml-[236px] min-w-0 relative z-10">
           {/* control bar */}
           <div className="sticky top-0 z-20 px-4 md:px-7 py-3"
-            style={{ background: 'color-mix(in srgb, var(--bg) 88%, transparent)', backdropFilter: 'blur(12px)', borderBottom: '1px solid var(--edge)' }}>
+            style={{
+              background: 'color-mix(in srgb, var(--bg) 62%, transparent)',
+              backdropFilter: 'blur(26px) saturate(170%)',
+              WebkitBackdropFilter: 'blur(26px) saturate(170%)',
+              borderBottom: '1px solid var(--edge)',
+              boxShadow: '0 1px 0 var(--glass-hi) inset',
+            }}>
             <div className="flex items-center gap-2.5 flex-wrap">
               <div className="md:hidden seg">
                 {NAV.map(n => <button key={n.id} aria-pressed={tab === n.id} onClick={() => setTab(n.id)}
