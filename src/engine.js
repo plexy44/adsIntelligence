@@ -770,6 +770,9 @@ export const parseMetaCSV = (text, fileName = 'Export') => {
   if (orphanSpend > 0) {
     notes.push(`${orphanSpend.toFixed(2)} of spend sits on entities that never recorded a single result, so their goal is unknown. It is counted against the primary goal, which is what makes it show up as waste rather than disappearing.`);
   }
+  if (roleIdx.reach && timeGrain !== 'lifetime') {
+    notes.push('Reach is reported per day in this export and cannot be added up, because someone reached on several days is one person counted several times. Deduplicated reach for the whole period is therefore unavailable here, and average daily reach and frequency are shown instead. An export without a day breakdown gives the true period figures.');
+  }
   if (clicksDerived) {
     notes.push(`This export has no click count column, so clicks have been recovered from ${clicksDerived === 'CTR' ? 'click-through rate multiplied by impressions' : 'spend divided by cost per click'}. That is exact arithmetic rather than an estimate, and it is what makes click-through rate, post-click conversion rate and the funnel diagnosis available at all. Add "Link clicks" to the export if you would rather read the figure straight from Meta.`);
   }
@@ -818,7 +821,7 @@ export const parseMetaCSV = (text, fileName = 'Export') => {
 const blankSums = () => ({
   spend: 0, impressions: 0, clicks: 0, linkClicks: 0, purchases: 0, revenue: 0,
   results: 0, convSpend: 0, conv: 0, rowCount: 0,
-  reachSum: 0, reachRows: 0, budget: null, offGoalSpend: 0,
+  reachSum: 0, reachRows: 0, reachMax: 0, reachImps: 0, budget: null, offGoalSpend: 0,
   statusLatest: null, statusAt: null, statusMix: new Set(), activeDays: new Set(),
   rankQ: [], rankE: [], rankC: [],
   indicators: new Set(), attributions: new Set(), delivery: new Set(),
@@ -846,7 +849,11 @@ const addRow = (a, r, ds) => {
   } else {
     a.offGoalSpend += r.spend || 0;
   }
-  if (r.reach !== null && r.reach !== undefined) { a.reachSum += r.reach; a.reachRows++; }
+  if (r.reach !== null && r.reach !== undefined && r.reach > 0) {
+    a.reachSum += r.reach; a.reachRows++;
+    if (r.reach > a.reachMax) a.reachMax = r.reach;
+    a.reachImps += r.impressions || 0;   // impressions from rows that reported reach
+  }
   if (r.budget !== null && r.budget !== undefined && a.budget === null) a.budget = r.budget;
   if (r.ranks?.quality !== null && r.ranks?.quality !== undefined) a.rankQ.push(r.ranks.quality);
   if (r.ranks?.engagement !== null && r.ranks?.engagement !== undefined) a.rankE.push(r.ranks.engagement);
@@ -872,6 +879,16 @@ const addRow = (a, r, ds) => {
 };
 
 export const deriveMetrics = (a, opts = {}) => {
+  /* Reach is the one Meta metric that cannot be added up: a person reached on
+     twenty different days is one person counted twenty times. On a real ad,
+     summing daily reach gave 631,798 against a true period reach of 375,975,
+     and turned a frequency of 1.83 into 1.07, which would make a fatiguing ad
+     look completely fresh.
+
+     So the deduplicated period figure is only reported when a single row
+     covers the whole entity. When it does not, the daily figures are still
+     real and worth showing, they simply answer a different question: how many
+     people on a typical day, seeing it how often that day. */
   const singleReachRow = a.reachRows === 1;
   const reach = singleReachRow ? a.reachSum : null;
   const clicks = a.linkClicks || a.clicks;
@@ -891,6 +908,13 @@ export const deriveMetrics = (a, opts = {}) => {
     revenue: a.revenue,
     reach,
     frequency: reach > 0 ? a.impressions / reach : null,
+    reachBasis: a.reachRows === 0 ? null : singleReachRow ? 'period' : 'daily',
+    reachDays: a.reachRows || null,
+    reachDailyAvg: a.reachRows > 1 ? a.reachSum / a.reachRows : null,
+    reachPeak: a.reachRows > 1 ? a.reachMax : null,
+    // Impressions per person per day. Deduplicated within a day by Meta, so
+    // this is exact, and it is a lower bound on true period frequency.
+    frequencyDaily: a.reachRows > 1 && a.reachSum > 0 ? a.reachImps / a.reachSum : null,
     cpm: a.impressions > 0 ? (a.spend / a.impressions) * 1000 : null,
     ctr: a.impressions > 0 ? (clicks / a.impressions) * 100 : null,
     cpc: clicks > 0 ? a.spend / clicks : null,
@@ -1041,6 +1065,29 @@ export const fatigueSignal = (entity, ds, opts = DEFAULTS) => {
   const flags = [];
   if (m.frequency !== null && m.frequency >= opts.fatigueFreq) {
     flags.push({ kind: 'frequency', text: `Frequency ${m.frequency.toFixed(1)}, so the same people are seeing this repeatedly.` });
+  }
+  /* On a daily export the period frequency is unknown, and average daily
+     frequency sits around 1.1 on a healthy account, so a static threshold
+     never fires. A rising trend is the signal that survives: it means the
+     audience is saturating even though each single day looks fine. */
+  if (m.frequency === null && m.frequencyDaily !== null && opts.rowIndex) {
+    const rs = (opts.rowIndex.get(entity.key) || [])
+      .filter(r => r.date && r.reach > 0 && (r.spend || 0) > 0)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    if (rs.length >= 21) {
+      const c = Math.floor(rs.length / 3);
+      const fq = (arr) => {
+        const rr = arr.reduce((s, r) => s + r.reach, 0);
+        return rr > 0 ? arr.reduce((s, r) => s + (r.impressions || 0), 0) / rr : null;
+      };
+      const a0 = fq(rs.slice(0, c)), a1 = fq(rs.slice(-c));
+      if (a0 && a1 && a1 >= a0 * 1.15 && a1 >= 1.15) {
+        flags.push({
+          kind: 'frequencyTrend',
+          text: `Average daily frequency has climbed from ${a0.toFixed(2)} to ${a1.toFixed(2)} across its run, which means the audience is saturating.`,
+        });
+      }
+    }
   }
   if (m.rankQuality === -1) flags.push({ kind: 'quality', text: 'Meta rates this creative\u2019s quality below average against competing ads.' });
   if (m.rankEngagement === -1) flags.push({ kind: 'engagement', text: 'Meta rates its engagement rate below average.' });
@@ -1514,6 +1561,8 @@ export const combineEntities = (list, label) => {
     s.delivery.forEach(v => sums.delivery.add(v));
     s.statusMix.forEach(v => sums.statusMix.add(v));
     s.activeDays.forEach(v => sums.activeDays.add(v));
+    if (s.reachMax > sums.reachMax) sums.reachMax = s.reachMax;
+    sums.reachImps += s.reachImps || 0;
     if (s.statusAt !== null && (sums.statusAt === null || s.statusAt >= sums.statusAt)) {
       sums.statusAt = s.statusAt; sums.statusLatest = s.statusLatest;
     }
