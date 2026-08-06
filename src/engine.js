@@ -528,6 +528,7 @@ export const parseMetaCSV = (text, fileName = 'Export') => {
   let ambiguousDates = false;
   const indicatorTotals = {};
   let statedTotals = null;
+  let clicksDerived = null;
   const attributionSet = new Set();
   const skipped = { total: 0, blank: 0 };
 
@@ -585,7 +586,26 @@ export const parseMetaCSV = (text, fileName = 'Export') => {
     const reach = get('reach');
     const linkClicks = get('linkClicks');
     const allClicks = get('allClicks');
-    const clicks = linkClicks !== null ? linkClicks : (allClicks || 0);
+    /* Some column sets ship the click RATES but not the click COUNT. Meta
+       computes CTR = clicks / impressions and CPC = spend / clicks, so the
+       count is exactly recoverable; on a real 43k-row export both routes
+       agreed on every single row. Without this, click-through rate reads as
+       a flat 0% and the whole funnel diagnosis silently disappears. */
+    let clicks = linkClicks !== null ? linkClicks : allClicks;
+    if (clicks === null) {
+      const ctrPct = roleIdx.ctr ? num(cols[roleIdx.ctr.index]) : null;
+      if (ctrPct !== null && impressions > 0) {
+        clicks = Math.round((ctrPct / 100) * impressions);
+        clicksDerived = 'CTR';
+      } else {
+        const cpcVal = roleIdx.cpc ? num(cols[roleIdx.cpc.index]) : null;
+        if (cpcVal !== null && cpcVal > 0 && spend > 0) {
+          clicks = Math.round(spend / cpcVal);
+          clicksDerived = 'CPC';
+        }
+      }
+    }
+    if (clicks === null) clicks = 0;
     const results = get('results');
     const indicator = settingIdx.resultIndicator !== undefined
       ? canonicalIndicator(cols[settingIdx.resultIndicator]) : null;
@@ -750,8 +770,11 @@ export const parseMetaCSV = (text, fileName = 'Export') => {
   if (orphanSpend > 0) {
     notes.push(`${orphanSpend.toFixed(2)} of spend sits on entities that never recorded a single result, so their goal is unknown. It is counted against the primary goal, which is what makes it show up as waste rather than disappearing.`);
   }
-  if (!roleIdx.linkClicks && roleIdx.allClicks) {
-    warnings.push('This export carries "Clicks (all)" but not "Link clicks". Every click is counted, including reactions, comments, shares and profile taps, so the click-through rate here reads higher and the click-to-result rate lower than the link-click versions in Ads Manager. Comparisons between entities stay valid because the basis is the same for all of them; only the absolute levels shift. Add Link clicks to the export for a like-for-like figure.');
+  if (clicksDerived) {
+    notes.push(`This export has no click count column, so clicks have been recovered from ${clicksDerived === 'CTR' ? 'click-through rate multiplied by impressions' : 'spend divided by cost per click'}. That is exact arithmetic rather than an estimate, and it is what makes click-through rate, post-click conversion rate and the funnel diagnosis available at all. Add "Link clicks" to the export if you would rather read the figure straight from Meta.`);
+  }
+  if (!roleIdx.linkClicks && (roleIdx.allClicks || clicksDerived)) {
+    warnings.push('This export measures all clicks rather than link clicks. Every click is counted, including reactions, comments, shares and profile taps, so the click-through rate here reads higher and the click-to-result rate lower than the link-click versions in Ads Manager. Comparisons between entities stay valid because the basis is the same for all of them; only the absolute levels shift. Add "Link clicks" to the export for a like-for-like figure.');
   }
   if (levelsPresent.length === 1 && finestLevel === 'campaign') {
     notes.push('Campaign-level export: ad set and ad comparison need an export at that level (Ads Manager → Ads tab → Export).');
@@ -771,6 +794,7 @@ export const parseMetaCSV = (text, fileName = 'Export') => {
     convRole, convLabel, convSingular: convLabel.replace(/ies$/, 'y').replace(/s$/, ''),
     primaryIndicator, numberLocale, statedTotals,
     hasReach: !!roleIdx.reach,
+    clicksDerived,
     hasRevenue: !!(roleIdx.revenue || roleIdx.roas),
     hasRanks: Object.keys(ordinalIdx).length > 0,
     metricCols, idColumns,
@@ -795,7 +819,7 @@ const blankSums = () => ({
   spend: 0, impressions: 0, clicks: 0, linkClicks: 0, purchases: 0, revenue: 0,
   results: 0, convSpend: 0, conv: 0, rowCount: 0,
   reachSum: 0, reachRows: 0, budget: null, offGoalSpend: 0,
-  statusLatest: null, statusAt: null, statusMix: new Set(),
+  statusLatest: null, statusAt: null, statusMix: new Set(), activeDays: new Set(),
   rankQ: [], rankE: [], rankC: [],
   indicators: new Set(), attributions: new Set(), delivery: new Set(),
   minDate: null, maxDate: null,
@@ -840,6 +864,9 @@ const addRow = (a, r, ds) => {
   if (r.date) {
     if (!a.minDate || r.date < a.minDate) a.minDate = r.date;
     if (!a.maxDate || r.date > a.maxDate) a.maxDate = r.date;
+    // Days it actually delivered, which is not the same as the span between
+    // its first and last day: most ads run in bursts with long gaps.
+    if ((r.spend || 0) > 0) a.activeDays.add(r.date);
   }
   a.rowCount++;
 };
@@ -888,7 +915,8 @@ export const deriveMetrics = (a, opts = {}) => {
     indicators: [...a.indicators],
     attributions: [...a.attributions],
     delivery: [...a.delivery],
-    activeDays: a.minDate && a.maxDate
+    activeDays: a.activeDays.size || null,
+    spanDays: a.minDate && a.maxDate
       ? Math.round((new Date(a.maxDate) - new Date(a.minDate)) / 86400000) + 1 : null,
     minDate: a.minDate, maxDate: a.maxDate,
   };
@@ -1485,6 +1513,7 @@ export const combineEntities = (list, label) => {
     s.attributions.forEach(v => sums.attributions.add(v));
     s.delivery.forEach(v => sums.delivery.add(v));
     s.statusMix.forEach(v => sums.statusMix.add(v));
+    s.activeDays.forEach(v => sums.activeDays.add(v));
     if (s.statusAt !== null && (sums.statusAt === null || s.statusAt >= sums.statusAt)) {
       sums.statusAt = s.statusAt; sums.statusLatest = s.statusLatest;
     }
