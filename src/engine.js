@@ -123,8 +123,15 @@ export const cpaInterval = (spend, conv, z = 1.96) => {
 };
 
 // Compare two conversion RATES per unit spend (Poisson exposure model).
-// Returns z and a two-sided p-value; null when either side has no data.
-export const compareRates = (conv1, spend1, conv2, spend2) => {
+//
+// Also returns the minimum detectable difference, which is the figure that
+// actually answers the user's question. Extrapolating "how much more data
+// would make THIS gap significant" explodes as the gap approaches zero: two
+// ads at £23.80 and £23.74 differ by 0.3%, which implies needing millions of
+// extra conversions. That is arithmetically true and practically nonsense.
+// The bounded, useful statement is the reverse: at these volumes, gaps below
+// X% cannot be seen at all.
+export const compareRates = (conv1, spend1, conv2, spend2, z0 = 1.96) => {
   if (!(spend1 > 0) || !(spend2 > 0)) return null;
   if (conv1 + conv2 === 0) return null;
   const r1 = conv1 / spend1, r2 = conv2 / spend2;
@@ -132,7 +139,22 @@ export const compareRates = (conv1, spend1, conv2, spend2) => {
   const se = Math.sqrt(v1 + v2);
   if (!(se > 0)) return null;
   const z = (r1 - r2) / se;
-  return { z, p: 2 * (1 - normalCdf(Math.abs(z))), r1, r2 };
+  const pooled = (conv1 + conv2) / (spend1 + spend2);
+  // Smallest relative gap this comparison could resolve at current volume.
+  const mdeRel = pooled > 0 ? (z0 * se) / pooled : null;
+  const obsRel = pooled > 0 ? Math.abs(r1 - r2) / pooled : null;
+  // Volume multiple that would make the observed gap significant. Infinite
+  // when the gap is effectively zero, which callers must handle rather than
+  // print.
+  const volumeMultiple = Math.abs(z) > 1e-9 ? Math.pow(z0 / Math.abs(z), 2) : Infinity;
+  const totalConv = conv1 + conv2;
+  const extraConv = isFinite(volumeMultiple) ? totalConv * (volumeMultiple - 1) : Infinity;
+  // Only worth quoting while it stays within reach of this account.
+  const extraIsRealistic = isFinite(extraConv) && extraConv <= totalConv * 20;
+  return {
+    z, p: 2 * (1 - normalCdf(Math.abs(z))), r1, r2, se, pooled,
+    mdeRel, obsRel, volumeMultiple, extraConv, extraIsRealistic, totalConv,
+  };
 };
 
 export const normalCdf = (x) => {
@@ -486,6 +508,7 @@ export const parseMetaCSV = (text, fileName = 'Export') => {
   /* --- rows --- */
   const rows = [];
   let minDate = null, maxDate = null;
+  let reportStart = null, reportEnd = null;
   let ambiguousDates = false;
   const indicatorTotals = {};
   let statedTotals = null;
@@ -526,6 +549,14 @@ export const parseMetaCSV = (text, fileName = 'Export') => {
       ambiguousDates = true;
     }
     const date = normaliseDate(rawDate, dOrder);
+    if (startIdx > -1) {
+      const rs = normaliseDate(cols[startIdx], dOrder);
+      if (rs && (!reportStart || rs < reportStart)) reportStart = rs;
+    }
+    if (endIdx > -1) {
+      const re = normaliseDate(cols[endIdx], dOrder);
+      if (re && (!reportEnd || re > reportEnd)) reportEnd = re;
+    }
     if (date) {
       if (!minDate || date < minDate) minDate = date;
       if (!maxDate || date > maxDate) maxDate = date;
@@ -594,6 +625,9 @@ export const parseMetaCSV = (text, fileName = 'Export') => {
 
   if (!rows.length) throw new Error('Every row was skipped — the export may contain only a summary line.');
 
+  const periodDays = reportStart && reportEnd
+    ? Math.round((new Date(reportEnd) - new Date(reportStart)) / 86400000) + 1 : null;
+
   /* --- blank Result indicator ---------------------------------------------
      Meta leaves Result indicator empty on any row where the entity produced
      no results in that period. Treating blank as "a different goal" and
@@ -637,7 +671,12 @@ export const parseMetaCSV = (text, fileName = 'Export') => {
     notes.push(`No separate time column, but Reporting starts covers ${distinctDates.length} distinct dates, so this has been read as ${timeGrain} level data.`);
   } else if (timeGrain === 'lifetime' || distinctDates.length <= 1) {
     timeGrain = 'lifetime';
-    notes.push('This export has no time breakdown, so trends over time are unavailable. Re-export with Breakdown → By Time → Day to unlock trend and fatigue analysis.');
+    const lvlWord = finestLevel === 'ad' ? 'ad' : finestLevel === 'adset' ? 'ad set' : 'campaign';
+    notes.push(
+      reportStart && reportEnd && reportStart !== reportEnd
+        ? `Every row covers the same window, ${reportStart} to ${reportEnd} (${periodDays} days), so this file holds one combined total per ${lvlWord} rather than a series. Reporting starts and Reporting ends describe that single window, which is why there is no trend to draw. Re-exporting with Breakdown → By Time → Day repeats each ${lvlWord} once per day and unlocks trends, click-through decay and period comparison.`
+        : `This export has one row per ${lvlWord} with no time breakdown, so trends over time are unavailable. Re-export with Breakdown → By Time → Day to unlock trend and fatigue analysis.`
+    );
   }
 
   /* --- primary conversion --- */
@@ -708,10 +747,8 @@ export const parseMetaCSV = (text, fileName = 'Export') => {
     currencySymbol: { GBP: '£', USD: '$', EUR: '€', JPY: '¥', INR: '₹' }[currency] || '',
     levelsPresent, finestLevel, timeGrain, dateOrder: dOrder,
     dateRange: { start: minDate, end: maxDate },
-    reportingRange: {
-      start: startIdx > -1 ? normaliseDate(body[0][startIdx], dOrder) : null,
-      end: endIdx > -1 ? normaliseDate(body[0][endIdx], dOrder) : null,
-    },
+    reportingRange: { start: reportStart, end: reportEnd },
+    periodDays,
     breakdowns: Object.keys(breakdownIdx),
     indicators, indicatorTotals,
     attributions: [...attributionSet],
@@ -1206,10 +1243,12 @@ export const generateFindings = (scored, bench, ds, opts = {}) => {
     });
   }
   if (ds.timeGrain === 'lifetime') {
+    const win = ds.reportingRange?.start && ds.reportingRange?.end
+      ? ` Its date columns cover ${ds.reportingRange.start} to ${ds.reportingRange.end}, but as a single window rather than a series.` : '';
     out.push({
       kind: 'measurement', severity: 'low', impact: 0,
-      title: 'No day-level data, so trends and fatigue cannot be measured',
-      body: 'Re-export with Breakdown → By Time → Day. It unlocks the trend chart, click-through decay detection and period-over-period comparison, all of which are currently unavailable.',
+      title: 'Everything here is one combined total per row, so trends and fatigue cannot be measured',
+      body: `Re-export with Breakdown → By Time → Day.${win} A day breakdown repeats each row once per day, which is what makes the trend chart, click-through decay detection and period-over-period comparison possible.`,
       entities: [],
     });
   }
