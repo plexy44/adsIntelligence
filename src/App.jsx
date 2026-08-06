@@ -808,7 +808,9 @@ const RowDetail = ({ e, bench, ds, fmt, ctrl }) => {
                 ['Cost per click', fmt.money(e.m.cpc)],
                 ['Revenue', e.m.revenue ? fmt.money0(e.m.revenue) : '-'],
                 ['ROAS', e.m.roas ? fmt.ratio(e.m.roas) : '-'],
-                ['Days running', e.m.activeDays ? nf(e.m.activeDays) : 'n/a']].map(([k, v]) => (
+                ['Days running', e.m.activeDays
+                  ? `${nf(e.m.activeDays)}${e.m.spanDays && e.m.spanDays !== e.m.activeDays ? ` of ${nf(e.m.spanDays)}` : ''}`
+                  : 'n/a']].map(([k, v]) => (
                 <React.Fragment key={k}>
                   <span style={{ color: 'var(--ink-4)' }}>{k}</span><span className="num text-right">{v}</span>
                 </React.Fragment>
@@ -1034,7 +1036,7 @@ const PerformanceView = ({ ds, scored, bench, ctrl, fmt, series, onFocus, onComp
                   tip={`Spend beyond what target efficiency would have cost: spend − (conversions × ${fmt.money0(ctrl.targetCpa)}). For zero-conversion entities it is the whole spend.`} />
                 {ds.timeGrain !== 'lifetime' && <th style={{ textAlign: 'center' }}>
                   <Tip tip="Daily spend shape over the period, which shows at a glance whether it ran continuously or in bursts."><span className="help">Daily</span></Tip></th>}
-                <th style={{ width: 34 }} />
+                <th className="stick-r" style={{ width: 72 }} />
               </tr>
             </thead>
             <tbody>
@@ -1100,7 +1102,7 @@ const PerformanceView = ({ ds, scored, bench, ctrl, fmt, series, onFocus, onComp
                           <Spark values={sp?.map(p => p.spend)} color={over ? 'var(--bad)' : 'var(--accent)'} />
                         </td>
                       )}
-                      <td>
+                      <td className="stick-r">
                         <div className="flex items-center gap-1 justify-end">
                           <Tip tip="Add to the head-to-head comparison.">
                             <button className="btn p-1" onClick={() => onCompare(e.key)} aria-label="Compare"><GitCompare size={12} /></button>
@@ -1850,7 +1852,7 @@ const BudgetView = ({ ds, scored, bench, ctrl, fmt }) => {
 
 // Bumped on every delivery. If the sidebar does not show this string, the
 // browser is still running an older bundle.
-const BUILD = 'build 2.2 · 2026-08-06';
+const BUILD = 'build 2.3 · 2026-08-06';
 
 const NAV = [
   { id: 'files', label: 'Exports', icon: Database },
