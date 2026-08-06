@@ -104,7 +104,7 @@ const Badge = ({ verdict }) => {
 // and this needs no axes.
 const Spark = ({ values, width = 68, height = 20, color }) => {
   const vals = (values || []).filter(v => typeof v === 'number' && isFinite(v));
-  if (vals.length < 2) return <span style={{ color: 'var(--ink-4)' }}>—</span>;
+  if (vals.length < 2) return <span style={{ color: 'var(--ink-4)' }}>-</span>;
   const max = Math.max(...vals), min = Math.min(...vals);
   const range = max - min || 1;
   const pts = vals.map((v, i) => `${(i / (vals.length - 1)) * width},${height - ((v - min) / range) * (height - 2) - 1}`).join(' ');
@@ -120,30 +120,30 @@ const Spark = ({ values, width = 68, height = 20, color }) => {
 /* ===================================================================== */
 
 const nf = (v, dp = 0) => v === null || v === undefined || !isFinite(v)
-  ? '—' : v.toLocaleString('en-GB', { minimumFractionDigits: dp, maximumFractionDigits: dp });
+  ? '-' : v.toLocaleString('en-GB', { minimumFractionDigits: dp, maximumFractionDigits: dp });
 
 const makeFmt = (ds) => {
   const sym = ds?.currencySymbol ?? '£';
   return {
     sym,
-    money: (v, dp = 2) => v === null || v === undefined || !isFinite(v) ? '—' : sym + nf(v, dp),
-    money0: (v) => v === null || v === undefined || !isFinite(v) ? '—' : sym + nf(v, 0),
+    money: (v, dp = 2) => v === null || v === undefined || !isFinite(v) ? '-' : sym + nf(v, dp),
+    money0: (v) => v === null || v === undefined || !isFinite(v) ? '-' : sym + nf(v, 0),
     compact: (v) => {
-      if (v === null || v === undefined || !isFinite(v)) return '—';
+      if (v === null || v === undefined || !isFinite(v)) return '-';
       if (Math.abs(v) >= 1e6) return (v / 1e6).toFixed(2) + 'M';
       if (Math.abs(v) >= 1e4) return (v / 1e3).toFixed(1) + 'k';
       return nf(v, 0);
     },
     moneyCompact: (v) => {
-      if (v === null || v === undefined || !isFinite(v)) return '—';
+      if (v === null || v === undefined || !isFinite(v)) return '-';
       if (Math.abs(v) >= 1e6) return sym + (v / 1e6).toFixed(2) + 'M';
       if (Math.abs(v) >= 1e4) return sym + (v / 1e3).toFixed(1) + 'k';
       return sym + nf(v, 0);
     },
-    int: (v) => v === null || v === undefined || !isFinite(v) ? '—' : nf(v, 0),
-    pct: (v, dp = 2) => v === null || v === undefined || !isFinite(v) ? '—' : nf(v, dp) + '%',
-    ratio: (v) => v === null || v === undefined || !isFinite(v) ? '—' : nf(v, 2) + '×',
-    dec: (v, dp = 2) => v === null || v === undefined || !isFinite(v) ? '—' : nf(v, dp),
+    int: (v) => v === null || v === undefined || !isFinite(v) ? '-' : nf(v, 0),
+    pct: (v, dp = 2) => v === null || v === undefined || !isFinite(v) ? '-' : nf(v, dp) + '%',
+    ratio: (v) => v === null || v === undefined || !isFinite(v) ? '-' : nf(v, 2) + '×',
+    dec: (v, dp = 2) => v === null || v === undefined || !isFinite(v) ? '-' : nf(v, dp),
   };
 };
 
@@ -200,7 +200,7 @@ const useSort = (rows, initial, getters) => {
 };
 
 /* ===================================================================== */
-/* Persistence — exports are megabytes, so IndexedDB not localStorage     */
+/* Persistence. Exports are megabytes, so IndexedDB rather than localStorage */
 /* ===================================================================== */
 
 const store = {
@@ -266,11 +266,11 @@ const ChartTip = ({ active, payload, label, fmt, unitFor }) => {
 /* ===================================================================== */
 
 const RECIPE = [
-  ['Level', 'Export from the Ads tab, not Campaigns — ad-level data rolls up to ad set and campaign, but never the other way round.'],
+  ['Level', 'Export from the Ads tab rather than Campaigns. Ad-level data rolls up to ad set and campaign, but never the other way round.'],
   ['Breakdown', 'By Time → Day. This is what unlocks trends, fatigue detection and period comparison.'],
   ['Columns', 'Performance plus Amount spent, Impressions, Reach, Frequency, Link clicks, CTR, CPM, and your conversion column.'],
   ['Attribution', 'Pick ONE window for the whole export. Mixing 7-day and 1-day makes ads incomparable.'],
-  ['Rankings', 'Add Quality / Engagement rate / Conversion rate ranking — Meta\u2019s own competitive read, free diagnosis.'],
+  ['Rankings', 'Add Quality, Engagement rate and Conversion rate ranking. They are Meta\u2019s own competitive read, and cost nothing to include.'],
 ];
 
 const ParseReport = ({ ds, fmt }) => {
@@ -339,7 +339,7 @@ const IngestionView = ({ files, activeId, onAdd, onRemove, onRename, onSelect })
         onAdd(ds, text);
       } catch (e) { errs.push(`${file.name}: ${e.message}`); }
     }
-    if (errs.length) setError(errs.join(' — '));
+    if (errs.length) setError(errs.join(' | '));
     setBusy(false);
   };
 
@@ -399,7 +399,9 @@ const IngestionView = ({ files, activeId, onAdd, onRemove, onRename, onSelect })
                 )}
                 <div className="text-[11px] num mt-1" style={{ color: 'var(--ink-4)' }}>
                   {ds.levelsPresent.join(' / ')} · {nf(ds.rowCount)} rows · {ds.currency}
-                  {ds.dateRange.start ? ` · ${longDate(ds.dateRange.start)} → ${longDate(ds.dateRange.end)}` : ' · lifetime'}
+                  {(ds.timeGrain === 'lifetime' ? ds.reportingRange : ds.dateRange)?.start
+                    ? ` · ${longDate((ds.timeGrain === 'lifetime' ? ds.reportingRange : ds.dateRange).start)} → ${longDate((ds.timeGrain === 'lifetime' ? ds.reportingRange : ds.dateRange).end)}`
+                    : ' · lifetime'}
                 </div>
                 <div className="flex flex-wrap gap-1.5 mt-2">
                   {isActive && <span className="chip t-info">Active</span>}
@@ -409,7 +411,7 @@ const IngestionView = ({ files, activeId, onAdd, onRemove, onRename, onSelect })
                     </Tip>
                   )}
                   {ds.indicators.length > 1 && (
-                    <Tip tip={`Mixed optimisation goals: ${ds.indicators.join(', ')}. Cost per result is only comparable within one goal — use the goal filter in the control bar.`}>
+                    <Tip tip={`Mixed optimisation goals: ${ds.indicators.join(', ')}. Cost per result is only comparable within a single goal, so use the goal filter in the control bar.`}>
                       <span className="chip t-warn help">{ds.indicators.length} goals</span>
                     </Tip>
                   )}
@@ -427,7 +429,7 @@ const IngestionView = ({ files, activeId, onAdd, onRemove, onRename, onSelect })
                 </div>
               </div>
               <div className="flex items-center gap-1 shrink-0">
-                <Tip tip="Rename — useful for tagging, e.g. “June · ad level” or “Previous period”.">
+                <Tip tip="Rename this file, which helps when tagging periods such as “June, ad level” or “Previous period”.">
                   <button className="btn p-1.5" onClick={() => { setEditing(f.id); setDraft(f.name); }} aria-label="Rename"><Pencil size={13} /></button>
                 </Tip>
                 <Tip tip="Remove this file from the browser.">
@@ -515,7 +517,8 @@ const OverviewView = ({ ds, entities, scored, bench, findings, ctrl, fmt, onFocu
   }, [scored]);
 
   const wasted = scored.reduce((s, e) => s + e.waste, 0);
-  const atRisk = scored.filter(e => e.verdict === 'cut').reduce((s, e) => s + e.m.spend, 0);
+  const recoverable = scored.reduce((s, e) => s + (e.recoverable ?? e.waste), 0);
+  const hasStatus = scored.some(e => e.status && e.status !== 'unknown');
   const producers = scored.filter(e => e.m.conv > 0).length;
   const levelWord = ctrl.level === 'ad' ? 'ads' : ctrl.level === 'adset' ? 'ad sets' : 'campaigns';
 
@@ -532,8 +535,8 @@ const OverviewView = ({ ds, entities, scored, bench, findings, ctrl, fmt, onFocu
     <div className="anim-in space-y-5">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <Stat label="Spend" value={fmt.moneyCompact(bench.totals.spend)}
-          sub={`${nf(entities.length)} ${levelWord}${ds.dateRange.start ? ` · ${shortDate(ds.dateRange.start)}–${shortDate(ds.dateRange.end)}` : ''}`}
-          tip="Total spend across everything matching the current filters. This is the only figure that is always exactly as Meta reports it — everything else is derived." />
+          sub={`${nf(entities.length)} ${levelWord}`}
+          tip="Total spend across everything matching the current filters. This is the only figure that is always exactly as Meta reports it. Everything else is derived." />
         <Stat label={ds.convLabel} value={fmt.int(bench.totals.conv)}
           sub={`${producers} of ${entities.length} ${levelWord} converting`}
           tip={`Conversions counted only from rows optimising for ${ds.primaryIndicator || ds.convLabel.toLowerCase()}. Rows chasing a different goal are excluded so this number means one thing.`} />
@@ -541,15 +544,18 @@ const OverviewView = ({ ds, entities, scored, bench, findings, ctrl, fmt, onFocu
           value={fmt.money(bench.cpa)}
           tone={bench.cpa === null ? undefined : bench.cpa <= ctrl.targetCpa ? 'var(--good)' : 'var(--bad)'}
           sub={`Target ${fmt.money0(ctrl.targetCpa)}${bench.cpa ? ` · ${bench.cpa <= ctrl.targetCpa ? 'inside' : ((bench.cpa / ctrl.targetCpa - 1) * 100).toFixed(0) + '% over'}` : ''}`}
-          tip="On-goal spend divided by conversions, computed from totals rather than averaging each entity's rate — a £5 ad with one lucky conversion cannot drag the account figure around." />
-        <Stat label="Above-target spend" value={fmt.moneyCompact(wasted)}
-          tone={wasted > 0 ? 'var(--warn)' : 'var(--good)'}
-          sub={atRisk > 0 ? `${fmt.moneyCompact(atRisk)} on ${levelWord} rated Cut` : 'Nothing clearly overspending'}
-          tip={`How much more you paid than target efficiency would have cost, summed over every ${levelWord.slice(0, -1)} above target: spend minus (conversions × ${fmt.money0(ctrl.targetCpa)}). Entities with zero conversions contribute their whole spend.`} />
+          tip="On-goal spend divided by conversions, computed from totals rather than by averaging each entity's rate, so a £5 ad with one lucky conversion cannot drag the account figure around." />
+        <Stat label={hasStatus ? 'Above target, still running' : 'Above-target spend'}
+          value={fmt.moneyCompact(hasStatus ? recoverable : wasted)}
+          tone={(hasStatus ? recoverable : wasted) > 0 ? 'var(--warn)' : 'var(--good)'}
+          sub={hasStatus
+            ? (wasted > recoverable ? `${fmt.moneyCompact(wasted - recoverable)} more is on ${levelWord} already switched off` : 'Nothing clearly overspending')
+            : (wasted > 0 ? 'Above what target efficiency would have cost' : 'Nothing clearly overspending')}
+          tip={`How much more you paid than target efficiency would have cost: spend minus (conversions multiplied by ${fmt.money0(ctrl.targetCpa)}), summed over everything above target. Entities with zero conversions contribute their whole spend.${hasStatus ? ' Only entities still delivering are counted here, because money already spent on stopped ads cannot be recovered.' : ''}`} />
       </div>
 
       {!!findings.length && (
-        <Card title={`What to do — ${findings.length} findings, most consequential first`} icon={Lightbulb} pad={false}>
+        <Card title={`What to do · ${findings.length} findings, most consequential first`} icon={Lightbulb} pad={false}>
           <div className="px-5 pb-5 grid gap-3 lg:grid-cols-2">
             {findings.map((f, i) => {
               const st = FINDING_STYLE[f.kind] || FINDING_STYLE.measurement;
@@ -665,16 +671,20 @@ const OverviewView = ({ ds, entities, scored, bench, findings, ctrl, fmt, onFocu
         </Card>
       )}
 
-      <Card title={`Where the money sits — ${levelWord} by verdict`} icon={Target}>
+      <Card title={`Where the money sits · ${levelWord} by verdict`} icon={Target}>
         <div className="space-y-2.5">
           {Object.entries(VERDICTS).filter(([k]) => verdictMix[k]).map(([k, v]) => {
             const row = verdictMix[k];
             const share = bench.totals.spend > 0 ? row.spend / bench.totals.spend : 0;
             return (
-              <div key={k} className="flex items-center gap-3">
-                <div className="w-[104px] shrink-0"><Tip tip={v.blurb}><span className="help"><Badge verdict={k} /></span></Tip></div>
-                <div className="flex-1 bar"><span style={{ width: `${Math.max(share * 100, 0.6)}%` }} /></div>
-                <div className="w-[128px] text-right num text-[12px] shrink-0">
+              /* A grid, not a flex row: "Underfunded" and "Already off" are far
+                 wider than "Cut", and a fixed pixel column let them spill over
+                 the bar. */
+              <div key={k} className="grid items-center gap-3"
+                style={{ gridTemplateColumns: 'minmax(120px, max-content) 1fr minmax(110px, max-content)' }}>
+                <Tip tip={v.blurb}><span style={{ cursor: 'help' }}><Badge verdict={k} /></span></Tip>
+                <div className="bar min-w-0"><span style={{ width: `${Math.max(share * 100, 0.6)}%` }} /></div>
+                <div className="text-right num text-[12px] whitespace-nowrap">
                   {fmt.moneyCompact(row.spend)} <span style={{ color: 'var(--ink-4)' }}>· {row.n}</span>
                 </div>
               </div>
@@ -687,12 +697,12 @@ const OverviewView = ({ ds, entities, scored, bench, findings, ctrl, fmt, onFocu
 };
 
 /* ===================================================================== */
-/* PERFORMANCE — table + quadrant map                                     */
+/* PERFORMANCE: table + quadrant map                                      */
 /* ===================================================================== */
 
 const RankDots = ({ m }) => {
   const items = [['Quality', m.rankQuality], ['Engagement', m.rankEngagement], ['Conversion', m.rankConversion]];
-  if (items.every(([, v]) => v === null)) return <span style={{ color: 'var(--ink-4)' }}>—</span>;
+  if (items.every(([, v]) => v === null)) return <span style={{ color: 'var(--ink-4)' }}>-</span>;
   const col = (v) => v === null ? 'var(--edge)' : v > 0 ? 'var(--good)' : v < 0 ? 'var(--bad)' : 'var(--ink-4)';
   const word = (v) => v === null ? 'not rated' : v > 0 ? 'above average' : v < 0 ? 'below average' : 'average';
   return (
@@ -704,9 +714,26 @@ const RankDots = ({ m }) => {
   );
 };
 
+// Status has to be visible at a glance, not buried in a filter: most rows in
+// a real export are ads that stopped months ago.
+const StatusDot = ({ m }) => {
+  const s = m.status || 'unknown';
+  if (s === 'unknown') return null;
+  const live = s === 'live';
+  return (
+    <Tip tip={live
+      ? `Delivering now (${(m.deliveryStatus || 'active').replace(/_/g, ' ')}). Changes you make here affect money still being spent.`
+      : `Switched off (${(m.deliveryStatus || 'inactive').replace(/_/g, ' ')}). Its spend is history, so there is nothing here to pause or save.`}>
+      <span className="inline-flex shrink-0" style={{ cursor: 'help' }}>
+        <span className={live ? 'live-dot' : 'off-dot'} />
+      </span>
+    </Tip>
+  );
+};
+
 const RowDetail = ({ e, bench, ds, fmt, ctrl }) => {
   const parts = e.diagnosis.parts;
-  const worstLabel = { cpm: 'the auction — a narrow audience or heavy overlap with your other ad sets', ctr: 'the creative — the first seconds and the headline are not earning the click', cvr: 'what happens after the click — the landing page, offer or form' };
+  const worstLabel = { cpm: 'the auction, which usually means a narrow audience or heavy overlap with your other ad sets', ctr: 'the creative, where the first seconds and the headline are not earning the click', cvr: 'what happens after the click, so the landing page, offer or form' };
   return (
     <tr>
       <td colSpan={99} style={{ background: 'var(--hover)' }}>
@@ -779,8 +806,8 @@ const RowDetail = ({ e, bench, ds, fmt, ctrl }) => {
                 ['Reach', e.m.reach === null ? 'n/a' : fmt.int(e.m.reach)],
                 ['Frequency', e.m.frequency === null ? 'n/a' : fmt.dec(e.m.frequency)],
                 ['Cost per click', fmt.money(e.m.cpc)],
-                ['Revenue', e.m.revenue ? fmt.money0(e.m.revenue) : '—'],
-                ['ROAS', e.m.roas ? fmt.ratio(e.m.roas) : '—'],
+                ['Revenue', e.m.revenue ? fmt.money0(e.m.revenue) : '-'],
+                ['ROAS', e.m.roas ? fmt.ratio(e.m.roas) : '-'],
                 ['Days running', e.m.activeDays ? nf(e.m.activeDays) : 'n/a']].map(([k, v]) => (
                 <React.Fragment key={k}>
                   <span style={{ color: 'var(--ink-4)' }}>{k}</span><span className="num text-right">{v}</span>
@@ -809,7 +836,7 @@ const QuadrantMap = ({ scored, bench, ctrl, fmt, ds, onFocus }) => {
 
   return (
     <div className="space-y-4">
-      <Card title="Efficiency map — spend against cost per result" icon={Crosshair}
+      <Card title="Efficiency map · spend against cost per result" icon={Crosshair}
         right={<Tip tip={<span>Each dot is one entity. Horizontal = how much it spends (log scale, because budgets differ by orders of magnitude). Vertical = what a result costs. Dot size = number of conversions.<br /><br />The green line is your target and the vertical line is median spend, which splits the picture into four decisions.</span>}>
           <span className="chip t-muted help"><Info size={10} />How to read</span></Tip>}>
         <div style={{ height: 380 }}>
@@ -880,7 +907,7 @@ const QuadrantMap = ({ scored, bench, ctrl, fmt, ds, onFocus }) => {
       </Card>
 
       {!!noConv.length && (
-        <Card title={`Not on the map — no ${ds.convLabel.toLowerCase()} yet`} icon={FileWarning} quiet>
+        <Card title={`Not on the map · no ${ds.convLabel.toLowerCase()} yet`} icon={FileWarning} quiet>
           <p className="text-[12px] mb-3" style={{ color: 'var(--ink-3)' }}>
             These cannot be placed on a cost-per-result axis because they have not produced a result. That is not the same
             as being bad: the question is only whether each has had a fair chance at {fmt.money0(ctrl.targetCpa)} a result.
@@ -993,8 +1020,8 @@ const PerformanceView = ({ ds, scored, bench, ctrl, fmt, series, onFocus, onComp
                 <SortHead label="Cost / result" k="cpa" sort={sort} setSort={setSort}
                   tip={`On-goal spend ÷ conversions, coloured against your ${fmt.money0(ctrl.targetCpa)} target. The small range beneath is the uncertainty implied by the conversion count.`} />
                 {cols !== 'verdict' && <>
-                  <SortHead label="CPM" k="cpm" sort={sort} setSort={setSort} tip="Cost per thousand impressions — what the auction is charging you. High CPM means a narrow audience, overlap with your own ad sets, or restrictive placements." />
-                  <SortHead label="CTR" k="ctr" sort={sort} setSort={setSort} tip="Click-through rate — whether the creative earns the click. This is the number the creative controls." />
+                  <SortHead label="CPM" k="cpm" sort={sort} setSort={setSort} tip="Cost per thousand impressions, which is what the auction is charging you. A high figure means a narrow audience, overlap with your own ad sets, or restrictive placements." />
+                  <SortHead label="CTR" k="ctr" sort={sort} setSort={setSort} tip="Click-through rate, which is whether the creative earns the click. This is the number the creative controls." />
                   <SortHead label="CVR" k="cvr" sort={sort} setSort={setSort} tip="Of the people who clicked, the share who converted. This is the landing page, the offer and the form, not the ad." />
                 </>}
                 {cols === 'full' && <>
@@ -1006,7 +1033,7 @@ const PerformanceView = ({ ds, scored, bench, ctrl, fmt, series, onFocus, onComp
                 <SortHead label="Over target" k="waste" sort={sort} setSort={setSort}
                   tip={`Spend beyond what target efficiency would have cost: spend − (conversions × ${fmt.money0(ctrl.targetCpa)}). For zero-conversion entities it is the whole spend.`} />
                 {ds.timeGrain !== 'lifetime' && <th style={{ textAlign: 'center' }}>
-                  <Tip tip="Daily spend shape over the period — a quick read on whether it ran continuously or in bursts."><span className="help">Daily</span></Tip></th>}
+                  <Tip tip="Daily spend shape over the period, which shows at a glance whether it ran continuously or in bursts."><span className="help">Daily</span></Tip></th>}
                 <th style={{ width: 34 }} />
               </tr>
             </thead>
@@ -1018,12 +1045,15 @@ const PerformanceView = ({ ds, scored, bench, ctrl, fmt, series, onFocus, onComp
                   <React.Fragment key={e.key}>
                     <tr>
                       <td className="stick">
-                        <div className="flex items-start gap-2">
-                          <div className="min-w-0">
-                            <div className="font-semibold truncate max-w-[260px]" title={e.name}>{e.name}</div>
-                            <div className="text-[10px] num truncate max-w-[260px]" style={{ color: 'var(--ink-4)' }}>
-                              {ctrl.level === 'ad' && e.adset ? e.adset : ctrl.level === 'adset' ? e.campaign : (e.m.delivery[0] || '')}
-                            </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <StatusDot m={e.m} />
+                            <span className="font-semibold truncate" title={e.name}>{e.name}</span>
+                          </div>
+                          <div className="text-[10px] num truncate pl-[14px]" style={{ color: 'var(--ink-4)' }}>
+                            {[e.m.status === 'off' ? (e.m.deliveryStatus || 'off').replace(/_/g, ' ') : null,
+                              ctrl.level === 'ad' ? e.adset : ctrl.level === 'adset' ? e.campaign : null]
+                              .filter(Boolean).join(' · ')}
                           </div>
                         </div>
                       </td>
@@ -1046,7 +1076,7 @@ const PerformanceView = ({ ds, scored, bench, ctrl, fmt, series, onFocus, onComp
                           {fmt.money(e.m.cpa)}
                         </div>
                         {e.ci && <div className="num text-[10px]" style={{ color: 'var(--ink-4)' }}>
-                          {fmt.money0(e.ci.low)}–{fmt.money0(e.ci.high)}
+                          {fmt.money0(e.ci.low)} to {fmt.money0(e.ci.high)}
                         </div>}
                       </td>
                       {cols !== 'verdict' && <>
@@ -1059,11 +1089,11 @@ const PerformanceView = ({ ds, scored, bench, ctrl, fmt, series, onFocus, onComp
                         <td className="num" style={{ color: e.m.frequency >= ctrl.fatigueFreq ? 'var(--warn)' : undefined }}>
                           {e.m.frequency === null ? 'n/a' : fmt.dec(e.m.frequency)}
                         </td>
-                        {ds.hasRevenue && <td className="num">{e.m.roas ? fmt.ratio(e.m.roas) : '—'}</td>}
+                        {ds.hasRevenue && <td className="num">{e.m.roas ? fmt.ratio(e.m.roas) : '-'}</td>}
                         <td style={{ textAlign: 'center' }}><RankDots m={e.m} /></td>
                       </>}
                       <td className="num" style={{ color: e.waste > 0 ? 'var(--warn)' : 'var(--ink-4)' }}>
-                        {e.waste > 0 ? fmt.money0(e.waste) : '—'}
+                        {e.waste > 0 ? fmt.money0(e.waste) : '-'}
                       </td>
                       {ds.timeGrain !== 'lifetime' && (
                         <td style={{ textAlign: 'center' }}>
@@ -1113,7 +1143,7 @@ const CompareView = ({ ds, scored, bench, ctrl, fmt, picks, setPicks, series }) 
 
   const rows = [
     { k: 'spend', label: 'Spend', get: e => e.m.spend, fmt: v => fmt.money0(v), better: null,
-      tip: 'Total spend. Not a quality signal on its own — it only sets how much the other numbers can be trusted.' },
+      tip: 'Total spend. Not a quality signal on its own, since all it sets is how much the other numbers can be trusted.' },
     { k: 'conv', label: ds.convLabel, get: e => e.m.conv, fmt: v => fmt.int(v), better: 'high',
       tip: 'Conversions attributed to the primary goal.' },
     { k: 'cpa', label: 'Cost per result', get: e => e.m.cpa, fmt: v => fmt.money(v), better: 'low',
@@ -1121,13 +1151,13 @@ const CompareView = ({ ds, scored, bench, ctrl, fmt, picks, setPicks, series }) 
     { k: 'cpm', label: 'CPM', get: e => e.m.cpm, fmt: v => fmt.money(v), better: 'low',
       tip: 'What the auction charges per thousand impressions. Differences here are about audience and placement, not creative.' },
     { k: 'ctr', label: 'CTR', get: e => e.m.ctr, fmt: v => fmt.pct(v), better: 'high',
-      tip: 'Share of impressions that produced a click — the clearest read on the creative itself.' },
+      tip: 'Share of impressions that produced a click, which is the clearest read on the creative itself.' },
     { k: 'cvr', label: 'Click → result', get: e => e.m.cvr, fmt: v => fmt.pct(v), better: 'high',
       tip: 'Share of clicks that converted. Differences here point past the ad, to the page and the offer.' },
     { k: 'cpc', label: 'Cost per click', get: e => e.m.cpc, fmt: v => fmt.money(v), better: 'low', tip: 'CPM and CTR combined.' },
     { k: 'freq', label: 'Frequency', get: e => e.m.frequency, fmt: v => v === null ? 'n/a' : fmt.dec(v), better: 'low',
       tip: 'Times the average person saw it. Only available where one row covers the whole entity.' },
-    { k: 'roas', label: 'ROAS', get: e => e.m.roas, fmt: v => v ? fmt.ratio(v) : '—', better: 'high', tip: 'Revenue ÷ spend where value is present.' },
+    { k: 'roas', label: 'ROAS', get: e => e.m.roas, fmt: v => v ? fmt.ratio(v) : '-', better: 'high', tip: 'Revenue ÷ spend where value is present.' },
   ].filter(r => r.k !== 'roas' || ds.hasRevenue);
 
   const tsData = useMemo(() => {
@@ -1159,7 +1189,7 @@ const CompareView = ({ ds, scored, bench, ctrl, fmt, picks, setPicks, series }) 
               </div>
               <select className="field w-full text-[12px]" value={picks[i] || ''}
                 onChange={e => { const n = [...picks]; n[i] = e.target.value || undefined; setPicks(n.filter((x, ix) => x || ix < 4)); }}>
-                <option value="">— none —</option>
+                <option value="">none</option>
                 {options.map(o => <option key={o} value={o}>{o}</option>)}
               </select>
             </div>
@@ -1235,7 +1265,7 @@ const CompareView = ({ ds, scored, bench, ctrl, fmt, picks, setPicks, series }) 
               const winner = test.r1 > test.r2 ? a : b;
               const loser = test.r1 > test.r2 ? b : a;
               const gap = (a.m.cpa !== null && b.m.cpa !== null) ? Math.abs(a.m.cpa - b.m.cpa) : null;
-              const pct = (x) => x === null || !isFinite(x) ? '—' : `${(x * 100).toFixed(x < 0.1 ? 1 : 0)}%`;
+              const pct = (x) => x === null || !isFinite(x) ? '-' : `${(x * 100).toFixed(x < 0.1 ? 1 : 0)}%`;
               // Round to something a person would actually say out loud.
               const roundish = (v) => v < 50 ? Math.ceil(v / 5) * 5 : Number(v.toPrecision(2));
               return (
@@ -1320,7 +1350,7 @@ const CompareView = ({ ds, scored, bench, ctrl, fmt, picks, setPicks, series }) 
 };
 
 /* ===================================================================== */
-/* SEGMENTS — naming taxonomy + Meta breakdowns                           */
+/* SEGMENTS: naming taxonomy + Meta breakdowns                            */
 /* ===================================================================== */
 
 const GroupTable = ({ groups, ds, ctrl, fmt, bench, labelHead, showMembers }) => {
@@ -1368,7 +1398,7 @@ const GroupTable = ({ groups, ds, ctrl, fmt, bench, labelHead, showMembers }) =>
                 <td><div className="num">{fmt.money(g.m.cpm)}</div><VsBench value={g.m.cpm} bench={bench.cpm} higherIsBetter={false} /></td>
                 <td><div className="num">{fmt.pct(g.m.ctr)}</div><VsBench value={g.m.ctr} bench={bench.ctr} /></td>
                 <td><div className="num">{fmt.pct(g.m.cvr)}</div><VsBench value={g.m.cvr} bench={bench.cvr} /></td>
-                <td className="num" style={{ color: g.waste > 0 ? 'var(--warn)' : 'var(--ink-4)' }}>{g.waste > 0 ? fmt.money0(g.waste) : '—'}</td>
+                <td className="num" style={{ color: g.waste > 0 ? 'var(--warn)' : 'var(--ink-4)' }}>{g.waste > 0 ? fmt.money0(g.waste) : '-'}</td>
               </tr>
             ))}
           </tbody>
@@ -1488,7 +1518,7 @@ const SegmentsView = ({ ds, ctrl, fmt, filters }) => {
 };
 
 /* ===================================================================== */
-/* CHANGE — first half vs second half                                     */
+/* CHANGE: first half against second half                                 */
 /* ===================================================================== */
 
 const ChangeView = ({ ds, ctrl, fmt, filters }) => {
@@ -1521,7 +1551,7 @@ const ChangeView = ({ ds, ctrl, fmt, filters }) => {
   }
 
   const Delta = ({ v, invert }) => {
-    if (v === null || !isFinite(v)) return <span style={{ color: 'var(--ink-4)' }}>—</span>;
+    if (v === null || !isFinite(v)) return <span style={{ color: 'var(--ink-4)' }}>-</span>;
     const good = invert ? v < 0 : v > 0;
     const flat = Math.abs(v) < 0.03;
     return (
@@ -1541,7 +1571,7 @@ const ChangeView = ({ ds, ctrl, fmt, filters }) => {
           max={ds.dateRange.end} onChange={e => setSplit(e.target.value)} />}>
         <p className="text-[12px]" style={{ color: 'var(--ink-3)' }}>
           Everything before {longDate(split)} is the “before”; that date onward is the “after”. Move the date to line the
-          split up with something real — a budget change, a new creative, a promotion — and the table shows what moved with it.
+          split up with something real, such as a budget change, a new creative or a promotion, and the table shows what moved with it.
         </p>
         <div className="grid sm:grid-cols-2 gap-3 mt-3">
           <div className="card card-quiet px-4 py-3">
@@ -1572,7 +1602,7 @@ const ChangeView = ({ ds, ctrl, fmt, filters }) => {
               <tr>
                 <th className="stick" style={{ textAlign: 'left', minWidth: 220 }}>{ctrl.level}</th>
                 <th><Tip tip="Spend in the later half compared with the earlier half."><span className="help">Spend</span></Tip></th>
-                <th><Tip tip="Change in spend. Neither direction is good or bad on its own — it is context for the rest of the row."><span className="help">Δ</span></Tip></th>
+                <th><Tip tip="Change in spend. Neither direction is good or bad on its own, since it is context for the rest of the row."><span className="help">Δ</span></Tip></th>
                 <th><Tip tip="Conversions in the later half."><span className="help">{ds.convLabel}</span></Tip></th>
                 <th><Tip tip="Change in conversion volume."><span className="help">Δ</span></Tip></th>
                 <th><Tip tip="Cost per result in the later half."><span className="help">Cost</span></Tip></th>
@@ -1622,20 +1652,64 @@ const ChangeView = ({ ds, ctrl, fmt, filters }) => {
 const BudgetView = ({ ds, scored, bench, ctrl, fmt }) => {
   const [changes, setChanges] = useState({});
   const [decay, setDecay] = useState(0.15);
-  const sim = useMemo(() => simulateReallocation(scored, changes, { decayPerDouble: decay }), [scored, changes, decay]);
+  const [planNote, setPlanNote] = useState(null);
+  const [includeOff, setIncludeOff] = useState(false);
+  const levelWord = ctrl.level === 'ad' ? 'ad' : ctrl.level === 'adset' ? 'ad set' : 'campaign';
+  // Budgets can only be moved on things that are still delivering. Listing
+  // 220 switched-off ads with sliders invites plans that cannot be executed.
+  const hasStatus = scored.some(e => e.status && e.status !== 'unknown');
+  const rows = useMemo(() => (hasStatus && !includeOff ? scored.filter(e => e.isLive) : scored), [scored, hasStatus, includeOff]);
+  const offCount = scored.length - rows.length;
+  useEffect(() => { setChanges({}); setPlanNote(null); }, [ctrl.level, includeOff]);
+  const sim = useMemo(() => simulateReallocation(rows, changes, { decayPerDouble: decay }), [rows, changes, decay]);
 
+  const MAX_MULT = 3;
   const suggest = () => {
     const next = {};
-    const winners = scored.filter(e => ['scale', 'starve'].includes(e.verdict)).sort((a, b) => a.m.cpa - b.m.cpa);
-    scored.filter(e => e.verdict === 'cut').forEach(e => { next[e.key] = 0; });
-    const freed = scored.filter(e => e.verdict === 'cut').reduce((s, e) => s + (e.m.cpaSpend || e.m.spend), 0);
-    if (winners.length && freed > 0) {
-      const per = freed / Math.min(winners.length, 3);
-      winners.slice(0, 3).forEach(e => {
-        const base = e.m.cpaSpend || e.m.spend;
-        if (base > 0) next[e.key] = Math.round(((base + per) / base) * 10) / 10;
-      });
+    // Sources in order of how confident we are that the money is wasted.
+    // Previously only "cut" counted, so on an account with none the button
+    // silently did nothing at all.
+    const cuts = rows.filter(e => e.verdict === 'cut');
+    const fixes = rows.filter(e => e.verdict === 'fix');
+    const watches = rows.filter(e => e.verdict === 'watch');
+    let freed = 0;
+    const take = (list, keepFraction) => list.forEach(e => {
+      const base = e.m.cpaSpend || e.m.spend;
+      if (!(base > 0)) return;
+      next[e.key] = keepFraction;
+      freed += base * (1 - keepFraction);
+    });
+    take(cuts, 0);
+    if (freed <= 0) take(fixes, 0.5);
+    if (freed <= 0) take(watches, 0.75);
+
+    const winners = rows
+      .filter(e => ['scale', 'starve', 'keep'].includes(e.verdict) && e.m.conv >= ctrl.minConv && e.m.cpa !== null)
+      .sort((a, b) => a.m.cpa - b.m.cpa);
+
+    if (!winners.length) {
+      setPlanNote(`Nothing to reallocate into: no ${levelWord} is under target with at least ${ctrl.minConv} ${ds.convLabel.toLowerCase()}. Lower "Min results" in the control bar, or widen the period, before trusting a plan.`);
+      setChanges(next); return;
     }
+    if (freed <= 0) {
+      setPlanNote(`Nothing to reallocate out of: no ${levelWord} in this view is running above target. That is a good position to be in, so any growth here means adding budget rather than moving it.`);
+      setChanges({}); return;
+    }
+
+    // Weight towards the most efficient rather than splitting evenly.
+    const picks = winners.slice(0, 3);
+    const weights = picks.map((_, i) => 1 / (i + 1));
+    const wsum = weights.reduce((s, w) => s + w, 0);
+    let capped = false;
+    picks.forEach((e, i) => {
+      const base = e.m.cpaSpend || e.m.spend;
+      if (!(base > 0)) return;
+      const raw = (base + freed * (weights[i] / wsum)) / base;
+      const m = Math.round(Math.min(raw, MAX_MULT) * 10) / 10;
+      if (raw > MAX_MULT) capped = true;
+      next[e.key] = m;
+    });
+    setPlanNote(`Freed ${fmt.money0(freed)} from ${cuts.length ? `${cuts.length} rated Cut` : fixes.length ? `${fixes.length} rated Fix` : `${watches.length} rated Watch`} and weighted it towards the ${picks.length} cheapest performers.${capped ? ` One or more increases were capped at ${MAX_MULT}× because tripling a budget is already beyond what these figures can support.` : ''}`);
     setChanges(next);
   };
 
@@ -1661,10 +1735,11 @@ const BudgetView = ({ ds, scored, bench, ctrl, fmt }) => {
       </div>
 
       <Card title="How pessimistic should this be?" icon={SlidersHorizontal}>
-        <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-          <div className="flex-1">
+        <div className="flex flex-col lg:flex-row lg:items-center gap-4">
+          {/* min-w-0 stops the slider column overflowing under the buttons */}
+          <div className="flex-1 min-w-0">
             <div className="flex justify-between text-[11px] mb-1.5">
-              <Tip tip="Doubling a budget almost never keeps the same cost per result: you buy less-responsive audience, competing against yourself in the auction. This is how much worse each doubling gets. 0% is the naive projection almost every media plan quietly assumes — and it is the main reason plans miss.">
+              <Tip tip="Doubling a budget almost never keeps the same cost per result, because you buy a less responsive audience and compete against yourself in the auction. This is how much worse each doubling gets. Zero is the naive projection almost every media plan quietly assumes, and it is the main reason plans miss.">
                 <span className="help" style={{ color: 'var(--ink-3)' }}>Efficiency lost per doubling of budget</span>
               </Tip>
               <span className="num font-bold" style={{ color: 'var(--accent)' }}>{(decay * 100).toFixed(0)}%</span>
@@ -1681,10 +1756,27 @@ const BudgetView = ({ ds, scored, bench, ctrl, fmt }) => {
                 <Sparkles size={13} /> Suggest a plan
               </button>
             </Tip>
-            <button className="btn px-3 py-2 text-[12px] font-semibold" onClick={() => setChanges({})}>Reset</button>
+            <button className="btn px-3 py-2 text-[12px] font-semibold"
+              onClick={() => { setChanges({}); setPlanNote(null); }}>Reset</button>
           </div>
         </div>
       </Card>
+
+      {planNote && (
+        <div className="card card-quiet px-4 py-3 flex items-start gap-2.5">
+          <Sparkles size={15} className="shrink-0 mt-0.5" style={{ color: 'var(--accent)' }} />
+          <p className="text-[11.5px] leading-relaxed" style={{ color: 'var(--ink-3)' }}>{planNote}</p>
+        </div>
+      )}
+
+      {hasStatus && offCount > 0 && (
+        <div className="flex items-center justify-between gap-3 flex-wrap text-[11.5px] px-1" style={{ color: 'var(--ink-4)' }}>
+          <span>Showing the {rows.length} {levelWord}{rows.length === 1 ? '' : 's'} still delivering. {offCount} switched off {offCount === 1 ? 'is' : 'are'} hidden, because their budgets cannot be changed.</span>
+          <button className="btn px-2.5 py-1 text-[11px] font-semibold" onClick={() => setIncludeOff(v => !v)}>
+            {includeOff ? 'Hide switched off' : 'Show switched off too'}
+          </button>
+        </div>
+      )}
 
       <div className="card overflow-hidden">
         <div className="overflow-auto scroll" style={{ maxHeight: '55vh' }}>
@@ -1704,7 +1796,7 @@ const BudgetView = ({ ds, scored, bench, ctrl, fmt }) => {
               </tr>
             </thead>
             <tbody>
-              {scored.map(e => {
+              {rows.map(e => {
                 const mult = changes[e.key] ?? 1;
                 const base = e.m.cpaSpend || e.m.spend;
                 const cpa1 = e.m.cpa === null ? null : mult > 1 ? e.m.cpa * (1 + decay * Math.log2(mult)) : e.m.cpa;
@@ -1720,7 +1812,7 @@ const BudgetView = ({ ds, scored, bench, ctrl, fmt }) => {
                     <td className="num">{fmt.money(e.m.cpa)}</td>
                     <td>
                       <div className="flex items-center gap-2 justify-center">
-                        <input type="range" min={0} max={3} step={0.1} value={mult} style={{ width: 96 }}
+                        <input type="range" min={0} max={MAX_MULT} step={0.1} value={Math.min(mult, MAX_MULT)} style={{ width: 96 }}
                           onChange={ev => setChanges(c => ({ ...c, [e.key]: parseFloat(ev.target.value) }))} />
                         <span className="num text-[11px] w-9 text-right"
                           style={{ color: mult === 0 ? 'var(--bad)' : mult > 1 ? 'var(--good)' : mult < 1 ? 'var(--warn)' : 'var(--ink-4)' }}>
@@ -1730,7 +1822,7 @@ const BudgetView = ({ ds, scored, bench, ctrl, fmt }) => {
                     </td>
                     <td className="num" style={{ color: mult !== 1 ? 'var(--ink)' : 'var(--ink-4)' }}>{fmt.money0(spend1)}</td>
                     <td className="num" style={{ color: cpa1 && cpa1 > ctrl.targetCpa ? 'var(--bad)' : undefined }}>{fmt.money(cpa1)}</td>
-                    <td className="num">{conv1 ? nf(conv1, 1) : '—'}</td>
+                    <td className="num">{conv1 ? nf(conv1, 1) : '-'}</td>
                   </tr>
                 );
               })}
@@ -1743,7 +1835,7 @@ const BudgetView = ({ ds, scored, bench, ctrl, fmt }) => {
         <Info size={15} className="shrink-0 mt-0.5" style={{ color: 'var(--info)' }} />
         <p className="text-[11.5px] leading-relaxed" style={{ color: 'var(--ink-3)' }}>
           This is arithmetic on past performance, not a forecast. It assumes each entity keeps working the way it has,
-          which is least true exactly where you are most tempted to believe it — the winner you want to triple. Treat the
+          which is least true exactly where you are most tempted to believe it, namely the winner you want to triple. Treat the
           projection as a ceiling, move budgets in steps of twenty or thirty percent, and re-read the numbers before the
           next step. Anything switched off also loses its learning, so switching it back on later is not free.
         </p>
@@ -1758,7 +1850,7 @@ const BudgetView = ({ ds, scored, bench, ctrl, fmt }) => {
 
 // Bumped on every delivery. If the sidebar does not show this string, the
 // browser is still running an older bundle.
-const BUILD = 'build 2.1 · 2026-08-05';
+const BUILD = 'build 2.2 · 2026-08-06';
 
 const NAV = [
   { id: 'files', label: 'Exports', icon: Database },
@@ -1855,30 +1947,37 @@ export default function App() {
   // dependency on every keystroke, re-scoring 25k rows as the user types.
   const ctrl = useMemo(() => ({ ...ctrlStore, level: level || ds?.finestLevel || 'campaign' }),
     [ctrlStore, level, ds]);
+  // Status is a property of the entity, not of each row. Filtering rows by
+  // delivery would show only the spend that happened while an ad was active,
+  // which is a different and far more confusing question than "what is live".
   const filters = useMemo(() => ({
     dateFrom: range.from || undefined, dateTo: range.to || undefined,
     indicator: indicator || undefined, search: search || undefined,
-    delivery: delivery || undefined,
-  }), [range, indicator, search, delivery]);
+  }), [range, indicator, search]);
+  const byStatus = useCallback((list) => (
+    !delivery ? list : list.filter(e => (e.m.status || 'unknown') === delivery)
+  ), [delivery]);
 
-  const entities = useMemo(() => ds ? aggregate(ds, { level: ctrl.level, filters }) : [], [ds, ctrl.level, filters]);
+  const entitiesAll = useMemo(() => ds ? aggregate(ds, { level: ctrl.level, filters }) : [], [ds, ctrl.level, filters]);
+  const entities = useMemo(() => byStatus(entitiesAll), [entitiesAll, byStatus]);
   // Benchmarks come from the unfiltered account so a search cannot move
   // the yardstick an entity is being judged against.
-  const benchBase = useMemo(() => ds ? aggregate(ds, {
-    level: ctrl.level, filters: { dateFrom: range.from || undefined, dateTo: range.to || undefined, indicator: indicator || undefined, delivery: delivery || undefined },
-  }) : [], [ds, ctrl.level, range, indicator, delivery]);
+  const universe = useMemo(() => ds ? aggregate(ds, {
+    level: ctrl.level, filters: { dateFrom: range.from || undefined, dateTo: range.to || undefined, indicator: indicator || undefined },
+  }) : [], [ds, ctrl.level, range, indicator]);
+  const statusCounts = useMemo(() => {
+    const c = { all: universe.length, live: 0, off: 0, unknown: 0 };
+    universe.forEach(e => { c[e.m.status || 'unknown'] = (c[e.m.status || 'unknown'] || 0) + 1; });
+    c.spendLive = universe.filter(e => e.m.status === 'live').reduce((s, e) => s + e.m.spend, 0);
+    c.spendOff = universe.filter(e => e.m.status === 'off').reduce((s, e) => s + e.m.spend, 0);
+    return c;
+  }, [universe]);
+  const benchBase = useMemo(() => byStatus(universe), [universe, byStatus]);
   const bench = useMemo(() => buildBenchmarks(benchBase), [benchBase]);
   const scored = useMemo(() => ds ? scoreEntities(entities, bench, ds, ctrl) : [], [entities, bench, ds, ctrl]);
   const scoredAll = useMemo(() => ds ? scoreEntities(benchBase, bench, ds, ctrl) : [], [benchBase, bench, ds, ctrl]);
   const findings = useMemo(() => ds ? generateFindings(scoredAll, bench, ds, ctrl) : [], [scoredAll, bench, ds, ctrl]);
   const series = useMemo(() => ds ? entitySeries(ds, ctrl.level, filters) : new Map(), [ds, ctrl.level, filters]);
-
-  const deliveryOptions = useMemo(() => {
-    if (!ds) return [];
-    const set = new Set();
-    ds.rows.forEach(r => { if (r.delivery && r.delivery !== '0') set.add(r.delivery.toLowerCase()); });
-    return [...set].sort();
-  }, [ds]);
 
   const focus = (key) => { setSearch(key); setTab('performance'); };
   const addCompare = (key) => {
@@ -1900,7 +1999,7 @@ export default function App() {
         }}>
         <span className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border"
           style={on
-            ? { background: 'linear-gradient(135deg, var(--accent), var(--accent-2))', borderColor: 'transparent', color: '#fff' }
+            ? { background: 'linear-gradient(135deg, var(--accent), var(--accent-2))', borderColor: 'transparent', color: 'var(--on-accent)' }
             : { background: 'var(--panel-lo)', borderColor: 'var(--edge)', color: 'inherit' }}>
           <Icon size={15} strokeWidth={2.2} />
         </span>
@@ -1923,7 +2022,7 @@ export default function App() {
             <div className="flex items-center gap-2.5">
               <span className="w-8 h-8 rounded-xl flex items-center justify-center"
                 style={{ background: 'linear-gradient(135deg, var(--accent), var(--accent-2))' }}>
-                <Gauge size={17} className="text-white" />
+                <Gauge size={17} style={{ color: 'var(--on-accent)' }} />
               </span>
               <div>
                 <div className="font-bold leading-none">Meta<span style={{ color: 'var(--ink-3)', fontWeight: 300 }}>Vision</span></div>
@@ -1974,7 +2073,7 @@ export default function App() {
                     </Tip>
                   )}
 
-                  <Tip tip={`Everything is judged against this. Set it to what a ${ds.convLabel.toLowerCase().replace(/s$/, '')} is actually worth to you — for a booking, that is usually the value of the booking times your margin.`}>
+                  <Tip tip={`Everything is judged against this. Set it to what a ${ds.convLabel.toLowerCase().replace(/s$/, '')} is actually worth to you. For a booking, that is usually the value of the booking multiplied by your margin.`}>
                     <label className="flex items-center gap-1.5 field py-1.5 px-2.5 cursor-help">
                       <Target size={13} style={{ color: 'var(--accent)' }} />
                       <span className="text-[11px]" style={{ color: 'var(--ink-3)' }}>Target</span>
@@ -2003,12 +2102,17 @@ export default function App() {
                     </Tip>
                   )}
 
-                  {!!deliveryOptions.length && (
-                    <Tip tip="Ads Manager keeps paused, archived and no-longer-delivering entities in the export, and their historical spend is still in these numbers. Filter to active to see only what is live now.">
-                      <select className="field text-[12px] py-1.5" value={delivery} onChange={e => setDelivery(e.target.value)}>
-                        <option value="">Any status</option>
-                        {deliveryOptions.map(d => <option key={d} value={d}>{d.replace(/_/g, ' ')}</option>)}
-                      </select>
+                  {statusCounts.live + statusCounts.off > 0 && (
+                    <Tip tip={<span>Ads Manager keeps paused and archived entities in the export, and their spend is still counted here. <b>Live</b> is what you can still change today; <b>Off</b> is history. Verdicts and recommendations adapt to whichever you are looking at.</span>}>
+                      <div className="seg">
+                        {[['', 'All', statusCounts.all], ['live', 'Live', statusCounts.live], ['off', 'Off', statusCounts.off]]
+                          .filter(([v, , n]) => v === '' || n > 0).map(([v, l, n]) => (
+                          <button key={v} aria-pressed={delivery === v} onClick={() => setDelivery(v)}>
+                            {v === 'live' && <span className="live-dot" />}{l}
+                            <span className="ml-1.5 opacity-60 num">{n}</span>
+                          </button>
+                        ))}
+                      </div>
                     </Tip>
                   )}
 
@@ -2049,9 +2153,17 @@ export default function App() {
           <div className="px-4 md:px-7 py-6 pb-20 max-w-[1500px]">
             {tab !== 'files' && ds && (
               <header className="mb-5">
-                <div className="eyebrow mb-1.5">
-                  {ds.currency} · {ctrl.level === 'ad' ? 'Ad level' : ctrl.level === 'adset' ? 'Ad set level' : 'Campaign level'}
-                  {ds.dateRange.start ? ` · ${longDate(ds.dateRange.start)} → ${longDate(ds.dateRange.end)}` : ' · lifetime totals'}
+                <div className="eyebrow mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+                  {delivery === 'live' && <span className="chip t-good"><span className="live-dot" />Live only</span>}
+                  {delivery === 'off' && <span className="chip t-muted">Switched off only</span>}
+                  <span>{ds.currency} · {ctrl.level === 'ad' ? 'Ad level' : ctrl.level === 'adset' ? 'Ad set level' : 'Campaign level'}</span>
+                  {(() => {
+                    // For a lifetime export every row carries the same start date, so
+                    // the min and max of the row dates collapse to a single day. The
+                    // window that actually describes the file is the reporting range.
+                    const r = ds.timeGrain === 'lifetime' ? ds.reportingRange : ds.dateRange;
+                    return r?.start ? ` · ${longDate(r.start)} → ${longDate(r.end || r.start)}` : ' · lifetime totals';
+                  })()}
                 </div>
                 <h1 className="text-[26px] font-light leading-tight">
                   {tab === 'overview' && <>What is <span className="font-bold">working</span></>}
