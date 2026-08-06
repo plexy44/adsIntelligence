@@ -3,98 +3,201 @@
 @tailwind utilities;
 
 /* =====================================================================
-   MetaVision , theme tokens. Dark is a flat void (no ambient movement);
-   light is cool paper with a deep indigo working accent.
+   MetaVision, "Lucent". A layered glass system.
+
+   Depth comes from translucency and light, not from motion. Nothing in
+   this file loops: every transition is a response to the pointer or the
+   keyboard, so the interface is still when you are still. Anything that
+   moves on its own competes with the numbers for attention, and the
+   numbers are the point.
    ===================================================================== */
+
 :root {
-  --bg: #05050a;
-  --panel-hi: rgba(20, 21, 32, 0.72);
-  --panel-lo: rgba(12, 13, 21, 0.55);
-  --edge: rgba(255, 255, 255, 0.09);
-  --edge-soft: rgba(255, 255, 255, 0.05);
-  --ink: #e6e9f2;
-  --ink-2: #b3bacb;
+  color-scheme: dark;
+
+  --bg: #05060c;
+  --bg-2: #090b14;
+
+  /* Glass is a tint plus a blur, never a flat fill. */
+  --glass: rgba(146, 158, 214, 0.055);
+  --glass-2: rgba(146, 158, 214, 0.028);
+  --glass-hi: rgba(255, 255, 255, 0.055);
+  --glass-blur: 22px;
+
+  --edge: rgba(168, 178, 226, 0.13);
+  --edge-soft: rgba(168, 178, 226, 0.07);
+  --edge-bright: rgba(190, 200, 255, 0.26);
+
+  --ink: #e9ecf6;
+  --ink-2: #b9c1d6;
   --ink-3: #949db6;
   --ink-4: #8b94ab;
 
   --accent: #818cf8;
   --accent-2: #a78bfa;
+  --on-accent: #0a0a14;
   --teal: #2dd4bf;
   --good: #34d399;
   --warn: #fbbf24;
   --bad: #fb7185;
   --info: #38bdf8;
 
-  --grid: rgba(160, 170, 255, 0.07);
+  --grid: rgba(160, 170, 255, 0.075);
   --tick: #949db6;
   --axis: #4b5470;
-  --hover: rgba(255, 255, 255, 0.035);
-  --sticky: #0a0a12;
-  --on-accent: #0a0a14;
+  --hover: rgba(255, 255, 255, 0.04);
+  --press: rgba(255, 255, 255, 0.07);
+
+  /* Sticky surfaces must be opaque: content scrolls underneath them. */
+  --sticky: #0b0d16;
+  --sticky-2: #10131f;
+
+  --shadow-lift: 0 18px 44px -26px rgba(0, 0, 0, 0.9);
+  --shadow-pop: 0 26px 60px -24px rgba(0, 0, 0, 0.95);
+  --ring: color-mix(in srgb, var(--accent) 55%, transparent);
+
+  --ease: cubic-bezier(.22, .68, .28, 1);
+  --fast: 140ms;
+  --med: 240ms;
 }
 
 [data-theme='light'] {
-  --bg: #eef1f7;
-  --panel-hi: rgba(255, 255, 255, 0.9);
-  --panel-lo: rgba(248, 250, 253, 0.72);
-  --edge: rgba(23, 34, 66, 0.13);
-  --edge-soft: rgba(23, 34, 66, 0.08);
-  --ink: #141a2e;
-  --ink-2: #33405c;
+  color-scheme: light;
+
+  --bg: #eef1f8;
+  --bg-2: #e5e9f4;
+
+  --glass: rgba(255, 255, 255, 0.66);
+  --glass-2: rgba(255, 255, 255, 0.44);
+  --glass-hi: rgba(255, 255, 255, 0.9);
+  --glass-blur: 20px;
+
+  --edge: rgba(28, 40, 82, 0.11);
+  --edge-soft: rgba(28, 40, 82, 0.065);
+  --edge-bright: rgba(67, 56, 202, 0.32);
+
+  --ink: #12182b;
+  --ink-2: #38445f;
   --ink-3: #4d5975;
   --ink-4: #5f6b88;
 
   --accent: #4338ca;
   --accent-2: #6d28d9;
+  --on-accent: #ffffff;
   --teal: #0f766e;
   --good: #047857;
   --warn: #92400e;
   --bad: #9f1239;
   --info: #0369a1;
 
-  --grid: rgba(79, 70, 229, 0.12);
+  --grid: rgba(67, 56, 202, 0.11);
   --tick: #4d5975;
   --axis: #8b95ad;
-  --hover: rgba(23, 34, 66, 0.04);
-  --sticky: #f4f6fa;
-  --on-accent: #ffffff;
+  --hover: rgba(28, 40, 82, 0.045);
+  --press: rgba(28, 40, 82, 0.075);
+
+  --sticky: #f6f8fc;
+  --sticky-2: #ffffff;
+
+  --shadow-lift: 0 16px 38px -24px rgba(23, 34, 66, 0.34);
+  --shadow-pop: 0 24px 52px -22px rgba(23, 34, 66, 0.4);
+  --ring: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
+/* Background lives on html as well as body so the canvas can never show a
+   different colour from the page during a theme change. */
+html { background: var(--bg); }
 html, body, #root { min-height: 100%; }
 body {
   background: var(--bg);
   color: var(--ink);
   font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+* { scrollbar-color: color-mix(in srgb, var(--accent) 34%, transparent) transparent; }
+
+/* Something for the glass to refract. Fixed, static and very quiet: it
+   reads as depth rather than decoration, and it never moves. */
+.ambient {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(58vw 46vw at 12% -6%, color-mix(in srgb, var(--accent) 20%, transparent), transparent 62%),
+    radial-gradient(50vw 40vw at 92% 4%, color-mix(in srgb, var(--teal) 13%, transparent), transparent 60%),
+    radial-gradient(64vw 52vw at 76% 102%, color-mix(in srgb, var(--accent-2) 17%, transparent), transparent 64%),
+    linear-gradient(180deg, var(--bg), var(--bg-2) 60%, var(--bg));
+}
+[data-theme='light'] .ambient {
+  background:
+    radial-gradient(58vw 46vw at 10% -8%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 60%),
+    radial-gradient(52vw 42vw at 94% 2%, color-mix(in srgb, var(--teal) 11%, transparent), transparent 58%),
+    radial-gradient(66vw 54vw at 78% 104%, color-mix(in srgb, var(--accent-2) 12%, transparent), transparent 62%),
+    linear-gradient(180deg, var(--bg), var(--bg-2) 55%, var(--bg));
 }
 
 /* ------------------------------ surfaces ------------------------------ */
+
 .card {
   position: relative;
-  border-radius: 16px;
-  border: 1px solid var(--edge);
-  background: linear-gradient(158deg, var(--panel-hi), var(--panel-lo));
-  box-shadow: 0 12px 34px -22px rgba(0, 0, 0, 0.7);
-}
-[data-theme='light'] .card { box-shadow: 0 12px 30px -20px rgba(23, 34, 66, 0.28); }
-.card-quiet { background: var(--panel-lo); }
-.dropzone {
-  border: 2px dashed var(--edge);
   border-radius: 18px;
-  transition: border-color 160ms ease, background 160ms ease;
+  background: var(--glass);
+  border: 1px solid var(--edge);
+  box-shadow: var(--shadow-lift), inset 0 1px 0 var(--glass-hi);
+  backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+  transition: border-color var(--med) var(--ease), box-shadow var(--med) var(--ease),
+              background var(--med) var(--ease), transform var(--med) var(--ease);
 }
-.dropzone:hover { border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: var(--hover); }
+/* A hairline of light along the top edge is what sells glass as a physical
+   sheet rather than a translucent rectangle. */
+.card::before {
+  content: ''; position: absolute; inset: 0 0 auto 0; height: 1px;
+  border-radius: 18px 18px 0 0;
+  background: linear-gradient(90deg, transparent, var(--edge-bright), transparent);
+  opacity: 0.75; pointer-events: none;
+}
+.card-quiet {
+  background: var(--glass-2);
+  box-shadow: inset 0 1px 0 var(--glass-hi);
+  backdrop-filter: blur(12px) saturate(130%);
+  -webkit-backdrop-filter: blur(12px) saturate(130%);
+}
+.card-quiet::before { opacity: 0.4; }
+.card-lift:hover {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--edge));
+  box-shadow: var(--shadow-pop), inset 0 1px 0 var(--glass-hi);
+  transform: translateY(-1px);
+}
 
-/* Entrance only , nothing in this app loops. */
-@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-.anim-in { animation: rise 280ms cubic-bezier(.22,.7,.3,1) both; }
+.dropzone {
+  border: 1.5px dashed var(--edge);
+  border-radius: 20px;
+  background: var(--glass-2);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: border-color var(--med) var(--ease), background var(--med) var(--ease),
+              transform var(--med) var(--ease);
+}
+.dropzone:hover {
+  border-color: color-mix(in srgb, var(--accent) 52%, transparent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--glass-2));
+  transform: translateY(-1px);
+}
+
+/* Entrance only. */
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.anim-in { animation: rise 320ms var(--ease) both; }
+@media (prefers-reduced-motion: reduce) {
+  .anim-in { animation: none; }
+  *, *::before, *::after { transition-duration: 1ms !important; animation-duration: 1ms !important; }
+}
 
 /* ---------------------------- typography ---------------------------- */
+
 .eyebrow {
-  font-size: 10px; font-weight: 700; letter-spacing: 0.22em;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.2em;
   text-transform: uppercase; color: var(--ink-4);
 }
-/* Every numeral in the app, including chart axes, shares one voice. */
 .num,
 .recharts-cartesian-axis-tick-value,
 .recharts-cartesian-axis-tick-value tspan,
@@ -108,116 +211,174 @@ input[type='number'], input[type='date'] {
 .recharts-cartesian-axis-tick-value { fill: var(--tick); font-size: 10px; }
 
 /* ------------------------------ controls ------------------------------ */
+
 .btn {
-  border-radius: 10px; border: 1px solid var(--edge);
-  color: var(--ink-2); background: transparent;
-  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+  border-radius: 11px;
+  border: 1px solid var(--edge);
+  color: var(--ink-2);
+  background: var(--glass-2);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease),
+              border-color var(--fast) var(--ease), transform var(--fast) var(--ease);
 }
-.btn:hover { color: var(--ink); background: var(--hover); }
+.btn:hover { color: var(--ink); background: var(--hover); border-color: var(--edge-bright); }
+.btn:active { background: var(--press); transform: translateY(0.5px); }
 .btn-on {
   color: var(--on-accent); border-color: transparent;
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 8px 20px -10px color-mix(in srgb, var(--accent) 75%, transparent);
 }
-.seg { display: inline-flex; padding: 3px; gap: 2px; border-radius: 12px; border: 1px solid var(--edge); background: var(--panel-lo); }
-/* Descendant, not child: tooltip wrappers sit between .seg and its buttons. */
-.seg button { border-radius: 9px; padding: 6px 12px; font-size: 12px; font-weight: 600; color: var(--ink-3); }
-.seg button:hover { color: var(--ink); }
-.seg button[aria-pressed='true'] { color: var(--on-accent); background: linear-gradient(135deg, var(--accent), var(--accent-2)); font-weight: 700; }
+.btn-on:hover { color: var(--on-accent); filter: brightness(1.06); border-color: transparent; }
+
+.seg {
+  display: inline-flex; padding: 3px; gap: 2px;
+  border-radius: 13px; border: 1px solid var(--edge);
+  background: var(--glass-2);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  box-shadow: inset 0 1px 0 var(--glass-hi);
+}
+.seg button {
+  border-radius: 10px; padding: 6px 12px; font-size: 12px; font-weight: 600;
+  color: var(--ink-3); display: inline-flex; align-items: center;
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.seg button:hover { color: var(--ink); background: var(--hover); }
+.seg button[aria-pressed='true'] {
+  color: var(--on-accent); font-weight: 700;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 6px 16px -8px color-mix(in srgb, var(--accent) 80%, transparent);
+}
 .seg > span { display: inline-flex; }
 
 .field {
-  background: var(--panel-lo); border: 1px solid var(--edge); border-radius: 10px;
-  color: var(--ink); padding: 8px 10px; font-size: 13px;
+  background: var(--glass-2);
+  border: 1px solid var(--edge);
+  border-radius: 11px;
+  color: var(--ink);
+  padding: 8px 10px; font-size: 13px;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease),
+              box-shadow var(--fast) var(--ease);
 }
-.field:focus { outline: none; border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.field:hover { border-color: var(--edge-bright); }
+.field:focus, .field:focus-within {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 62%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
 select.field { appearance: none; padding-right: 28px; cursor: pointer; }
 option { background: var(--sticky); color: var(--ink); }
-input[type='number'], input[type='date'], input[type='range'] { color-scheme: dark; }
-[data-theme='light'] input[type='number'],
-[data-theme='light'] input[type='date'],
-[data-theme='light'] input[type='range'] { color-scheme: light; }
 input[type='range'] { accent-color: var(--accent); }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 8px; }
 
 /* ------------------------------- tables ------------------------------- */
+/* Sticky cells sit on opaque fills. Glass there would let rows show through
+   as they scroll underneath, which reads as a rendering fault. */
+
 .tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
 .tbl thead th {
   position: sticky; top: 0; z-index: 2;
   background: var(--sticky);
-  font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+  font-size: 10px; letter-spacing: 0.13em; text-transform: uppercase;
   color: var(--ink-4); font-weight: 700; text-align: right;
-  padding: 10px 12px; border-bottom: 1px solid var(--edge); white-space: nowrap;
+  padding: 11px 12px; border-bottom: 1px solid var(--edge); white-space: nowrap;
 }
 .tbl thead th:first-child, .tbl tbody td:first-child { text-align: left; }
-.tbl tbody td { padding: 10px 12px; text-align: right; border-bottom: 1px solid var(--edge-soft); vertical-align: middle; }
-.tbl tbody tr:hover { background: var(--hover); }
+.tbl tbody td {
+  padding: 10px 12px; text-align: right;
+  border-bottom: 1px solid var(--edge-soft); vertical-align: middle;
+  transition: background var(--fast) var(--ease);
+}
+.tbl tbody tr:hover td { background: var(--hover); }
 .tbl .stick {
   position: sticky; left: 0; z-index: 1; background: var(--sticky);
   border-right: 1px solid var(--edge);
 }
-/* Row actions pinned to the right edge. With the "Everything" column set the
-   table scrolls sideways, and the compare and expand buttons used to sit off
-   screen where they could not be reached. */
 .tbl .stick-r {
   position: sticky; right: 0; z-index: 1; background: var(--sticky);
   border-left: 1px solid var(--edge);
 }
-/* The header's own pinned cells must outrank the body's, or scrolled rows
-   paint over the column titles. */
 .tbl thead th.stick, .tbl thead th.stick-r { z-index: 4; }
 .tbl tbody tr:hover .stick,
-.tbl tbody tr:hover .stick-r { background: color-mix(in srgb, var(--sticky) 88%, var(--ink)); }
-.sortable { cursor: pointer; user-select: none; }
+.tbl tbody tr:hover .stick-r { background: var(--sticky-2); }
+.sortable { cursor: pointer; user-select: none; transition: color var(--fast) var(--ease); }
 .sortable:hover { color: var(--ink); }
 
 /* ------------------------------ tooltips ------------------------------ */
-/* Rendered into <body> through a portal so a card's overflow can never
-   clip an explanation. */
+
 .tip {
-  position: fixed; z-index: 9999; max-width: 320px;
-  padding: 10px 12px; border-radius: 11px;
-  font-size: 11.5px; line-height: 1.55; font-weight: 500;
-  color: var(--ink); background: var(--sticky);
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--edge));
-  box-shadow: 0 18px 40px -18px rgba(0, 0, 0, 0.75);
+  position: fixed; z-index: 9999; max-width: 330px;
+  padding: 11px 13px; border-radius: 13px;
+  font-size: 11.5px; line-height: 1.6; font-weight: 500;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--sticky) 88%, transparent);
+  border: 1px solid var(--edge-bright);
+  box-shadow: var(--shadow-pop), inset 0 1px 0 var(--glass-hi);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
   pointer-events: none; transform: translate(-50%, -100%) translateY(-10px);
 }
 .tip.below { transform: translate(-50%, 0) translateY(10px); }
 .tip b { color: var(--accent); font-weight: 700; }
-[data-theme='light'] .tip { box-shadow: 0 18px 40px -20px rgba(23, 34, 66, 0.4); }
 .help { cursor: help; border-bottom: 1px dotted var(--ink-4); }
 
 /* ---------------------------- scrollbars ---------------------------- */
-.scroll::-webkit-scrollbar { width: 9px; height: 9px; }
+
+.scroll { scroll-behavior: smooth; }
+.scroll::-webkit-scrollbar { width: 10px; height: 10px; }
 .scroll::-webkit-scrollbar-track { background: transparent; }
 .scroll::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--accent) 35%, transparent);
-  border-radius: 99px; border: 2px solid transparent; background-clip: content-box;
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+  border-radius: 99px; border: 3px solid transparent; background-clip: content-box;
+  transition: background var(--fast) var(--ease);
 }
-.scroll::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--accent) 55%, transparent); background-clip: content-box; }
+.scroll::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--accent) 58%, transparent); background-clip: content-box;
+}
 
-/* ------------------------------ chips ------------------------------ */
+/* ------------------------------- chips ------------------------------- */
+
 .chip {
   display: inline-flex; align-items: center; gap: 5px;
-  padding: 3px 8px; border-radius: 7px; font-size: 10px;
+  padding: 3px 9px; border-radius: 8px; font-size: 10px;
   font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
   border: 1px solid transparent; white-space: nowrap;
 }
-.t-good { color: var(--good); background: color-mix(in srgb, var(--good) 13%, transparent); border-color: color-mix(in srgb, var(--good) 30%, transparent); }
-.t-warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 13%, transparent); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
-.t-bad  { color: var(--bad);  background: color-mix(in srgb, var(--bad) 13%, transparent);  border-color: color-mix(in srgb, var(--bad) 30%, transparent); }
-.t-info { color: var(--info); background: color-mix(in srgb, var(--info) 13%, transparent); border-color: color-mix(in srgb, var(--info) 30%, transparent); }
+.t-good { color: var(--good); background: color-mix(in srgb, var(--good) 15%, transparent); border-color: color-mix(in srgb, var(--good) 34%, transparent); }
+.t-warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 15%, transparent); border-color: color-mix(in srgb, var(--warn) 34%, transparent); }
+.t-bad  { color: var(--bad);  background: color-mix(in srgb, var(--bad) 15%, transparent);  border-color: color-mix(in srgb, var(--bad) 34%, transparent); }
+.t-info { color: var(--info); background: color-mix(in srgb, var(--info) 15%, transparent); border-color: color-mix(in srgb, var(--info) 34%, transparent); }
 .t-muted{ color: var(--ink-3); background: var(--hover); border-color: var(--edge); }
 .t-neutral { color: var(--ink-2); background: var(--hover); border-color: var(--edge); }
 
-/* delivery status. A filled ring for live, a hollow one for stopped, so the
-   difference survives greyscale and colour-blindness. */
-.live-dot, .off-dot {
-  width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none;
-}
-.live-dot { background: var(--good); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--good) 22%, transparent); }
-.off-dot { background: var(--ink-4); opacity: 0.75; }
+/* delivery status */
+.live-dot, .off-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; }
+.live-dot { background: var(--good); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--good) 24%, transparent); }
+.off-dot { background: var(--ink-4); opacity: 0.7; }
 .seg button .live-dot { margin-right: 6px; }
 
-/* mini share bar */
-.bar { height: 4px; border-radius: 99px; background: var(--edge-soft); overflow: hidden; }
-.bar > span { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+/* share bar */
+.bar { height: 5px; border-radius: 99px; background: var(--edge-soft); overflow: hidden; }
+.bar > span {
+  display: block; height: 100%; border-radius: 99px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  box-shadow: 0 0 10px -2px color-mix(in srgb, var(--accent) 60%, transparent);
+  transition: width var(--med) var(--ease);
+}
+
+/* navigation */
+.nav-item {
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease),
+              border-color var(--fast) var(--ease);
+}
+.nav-item:hover:not([data-on='true']):not(:disabled) { background: var(--hover); color: var(--ink); }
+.nav-tile {
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease),
+              box-shadow var(--fast) var(--ease);
+}
+[data-on='true'] .nav-tile {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  border-color: transparent;
+  box-shadow: 0 8px 20px -10px color-mix(in srgb, var(--accent) 85%, transparent);
+}
