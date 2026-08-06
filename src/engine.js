@@ -1,5 +1,5 @@
 /* =====================================================================
-   MetaVision Engine — parsing, aggregation and judgement for raw
+   MetaVision Engine. Parsing, aggregation and judgement for raw
    Meta Ads Manager CSV exports.
 
    Design rules learned the hard way:
@@ -180,7 +180,7 @@ export const quantile = (arr, q) => {
   return a[lo] + (a[hi] - a[lo]) * (pos - lo);
 };
 
-// Share of a total held by the largest n contributors — concentration risk.
+// Share of a total held by the largest n contributors, i.e. concentration risk.
 export const topNShare = (values, n) => {
   const a = values.filter(v => v > 0).sort((x, y) => y - x);
   const total = a.reduce((s, v) => s + v, 0);
@@ -289,6 +289,22 @@ export const canonicalIndicator = (raw) => {
   if (/reach|impression/.test(c)) return 'Reach';
   if (/click/.test(c)) return 'Click';
   return c.charAt(0).toUpperCase() + c.slice(1);
+};
+
+/* Delivery status. An export is a history book as much as a control panel:
+   on a real account most rows are ads that stopped months ago. Advice that
+   ignores this tells you to pause things already paused and to pour budget
+   into a Black Friday ad that has been off since December. */
+const OFF_STATES = /^(inactive|paused|archived|deleted|not[_ ]delivering|completed|ended|rejected|disapproved|error|campaign[_ ]off|adset[_ ]off)/;
+const LIVE_STATES = /^(active|delivering|learning|in[_ ]review|scheduled|pending|processing)/;
+
+export const normaliseStatus = (raw) => {
+  if (raw === null || raw === undefined) return 'unknown';
+  const s = String(raw).toLowerCase().trim();
+  if (!s || s === '0' || s === '-') return 'unknown';
+  if (OFF_STATES.test(s)) return 'off';
+  if (LIVE_STATES.test(s)) return 'live';
+  return 'unknown';
 };
 
 const RANK_SCORE = (raw) => {
@@ -405,7 +421,7 @@ export const parseMetaCSV = (text, fileName = 'Export') => {
       else if (sample.includes('£')) currency = 'GBP';
     }
   }
-  if (!currency) { currency = 'GBP'; notes.push('No currency column found — assuming GBP. Amounts are still exact.'); }
+  if (!currency) { currency = 'GBP'; notes.push('No currency column found, so amounts are assumed to be GBP. The figures themselves are exact.'); }
 
   /* --- entity hierarchy --- */
   const entityIdx = {};
@@ -420,7 +436,7 @@ export const parseMetaCSV = (text, fileName = 'Export') => {
     if (i === -1) throw new Error('Could not find a Campaign / Ad set / Ad name column.');
     entityIdx.campaign = i;
     levelsPresent.push('campaign');
-    notes.push(`No standard name column found — using "${headers[i]}" as the entity name.`);
+    notes.push(`No standard name column found, so "${headers[i]}" is being used as the entity name.`);
   }
   const finestLevel = levelsPresent[levelsPresent.length - 1];
 
@@ -623,7 +639,7 @@ export const parseMetaCSV = (text, fileName = 'Export') => {
     });
   }
 
-  if (!rows.length) throw new Error('Every row was skipped — the export may contain only a summary line.');
+  if (!rows.length) throw new Error('Every row was skipped. The export may contain only a summary line.');
 
   const periodDays = reportStart && reportEnd
     ? Math.round((new Date(reportEnd) - new Date(reportStart)) / 86400000) + 1 : null;
@@ -705,7 +721,7 @@ export const parseMetaCSV = (text, fileName = 'Export') => {
 
   const indicators = indicatorNames;
   if (indicators.length > 1) {
-    warnings.push(`This export mixes ${indicators.length} optimisation goals (${indicators.join(', ')}). "Results" means something different in each, so blended cost-per-result is not comparable across them — use the goal filter.`);
+    warnings.push(`This export mixes ${indicators.length} optimisation goals (${indicators.join(', ')}). "Results" means something different in each, so blended cost-per-result is not comparable across them. Use the goal filter to isolate one.`);
   }
   if (attributionSet.size > 1) {
     warnings.push(`Rows use ${attributionSet.size} different attribution settings (${[...attributionSet].join(' · ')}). Conversion counts are not directly comparable between them.`);
@@ -717,13 +733,13 @@ export const parseMetaCSV = (text, fileName = 'Export') => {
     warnings.push('Reach cannot be added up across breakdown rows (the same person appears in several). Reach and Frequency are shown only where a single row covers the entity.');
   }
   if (ambiguousDates) {
-    warnings.push(`Dates could be either day-first or month-first and there was not enough variety in the file to be sure. They have been read as ${dOrder === 'mdy' ? 'month-first (US)' : 'day-first (UK/EU)'} — check the date range below looks right.`);
+    warnings.push(`Dates could be either day-first or month-first and there was not enough variety in the file to be sure. They have been read as ${dOrder === 'mdy' ? 'month-first (US)' : 'day-first (UK/EU)'}, so check the date range below looks right.`);
   }
   if (statedTotals) {
     const ourSpend = rows.reduce((s, r) => s + (r.spend || 0), 0);
     const drift = statedTotals.spend > 0 ? Math.abs(ourSpend - statedTotals.spend) / statedTotals.spend : 0;
     if (drift > 0.005) {
-      warnings.push(`This file states account totals of ${statedTotals.spend.toFixed(2)} but its rows add up to ${ourSpend.toFixed(2)}, a ${(drift * 100).toFixed(1)}% gap. Either rows are missing from the export or a column has been misread — check the mapping below before trusting anything here.`);
+      warnings.push(`This file states account totals of ${statedTotals.spend.toFixed(2)} but its rows add up to ${ourSpend.toFixed(2)}, a ${(drift * 100).toFixed(1)}% gap. Either rows are missing from the export or a column has been misread, so check the mapping below before trusting anything here.`);
     } else {
       notes.push(`Rows reconcile with the account total Meta states in this file (${statedTotals.spend.toFixed(2)}), so nothing has been dropped or double counted.`);
     }
@@ -752,7 +768,8 @@ export const parseMetaCSV = (text, fileName = 'Export') => {
     breakdowns: Object.keys(breakdownIdx),
     indicators, indicatorTotals,
     attributions: [...attributionSet],
-    convRole, convLabel, primaryIndicator, numberLocale, statedTotals,
+    convRole, convLabel, convSingular: convLabel.replace(/ies$/, 'y').replace(/s$/, ''),
+    primaryIndicator, numberLocale, statedTotals,
     hasReach: !!roleIdx.reach,
     hasRevenue: !!(roleIdx.revenue || roleIdx.roas),
     hasRanks: Object.keys(ordinalIdx).length > 0,
@@ -778,6 +795,7 @@ const blankSums = () => ({
   spend: 0, impressions: 0, clicks: 0, linkClicks: 0, purchases: 0, revenue: 0,
   results: 0, convSpend: 0, conv: 0, rowCount: 0,
   reachSum: 0, reachRows: 0, budget: null, offGoalSpend: 0,
+  statusLatest: null, statusAt: null, statusMix: new Set(),
   rankQ: [], rankE: [], rankC: [],
   indicators: new Set(), attributions: new Set(), delivery: new Set(),
   minDate: null, maxDate: null,
@@ -811,7 +829,14 @@ const addRow = (a, r, ds) => {
   if (r.ranks?.conversion !== null && r.ranks?.conversion !== undefined) a.rankC.push(r.ranks.conversion);
   if (r.indicator) a.indicators.add(r.indicator);
   if (r.attribution) a.attributions.add(r.attribution);
-  if (r.delivery) a.delivery.add(r.delivery);
+  if (r.delivery) {
+    a.delivery.add(r.delivery);
+    // With day-level rows an ad's status changes over time, so the newest
+    // row is the one that describes it now.
+    const at = r.date || '';
+    if (a.statusAt === null || at >= a.statusAt) { a.statusAt = at; a.statusLatest = r.delivery; }
+    a.statusMix.add(normaliseStatus(r.delivery));
+  }
   if (r.date) {
     if (!a.minDate || r.date < a.minDate) a.minDate = r.date;
     if (!a.maxDate || r.date > a.maxDate) a.maxDate = r.date;
@@ -852,6 +877,14 @@ export const deriveMetrics = (a, opts = {}) => {
     rankConversion: a.rankC.length ? median(a.rankC) : null,
     budget: a.budget,
     rowCount: a.rowCount,
+    deliveryStatus: a.statusLatest,
+    // Several rows can share a name (the same ad in two ad sets, or a day
+    // series spanning a pause). If any part is still delivering, treat the
+    // whole as live: wrongly hiding something that is still spending is the
+    // more expensive mistake.
+    status: a.statusMix.has('live') ? 'live'
+      : a.statusMix.has('off') ? 'off'
+        : normaliseStatus(a.statusLatest),
     indicators: [...a.indicators],
     attributions: [...a.attributions],
     delivery: [...a.delivery],
@@ -979,7 +1012,7 @@ export const fatigueSignal = (entity, ds, opts = DEFAULTS) => {
   const m = entity.m;
   const flags = [];
   if (m.frequency !== null && m.frequency >= opts.fatigueFreq) {
-    flags.push({ kind: 'frequency', text: `Frequency ${m.frequency.toFixed(1)} — the same people are seeing this repeatedly.` });
+    flags.push({ kind: 'frequency', text: `Frequency ${m.frequency.toFixed(1)}, so the same people are seeing this repeatedly.` });
   }
   if (m.rankQuality === -1) flags.push({ kind: 'quality', text: 'Meta rates this creative\u2019s quality below average against competing ads.' });
   if (m.rankEngagement === -1) flags.push({ kind: 'engagement', text: 'Meta rates its engagement rate below average.' });
@@ -1017,8 +1050,10 @@ export const VERDICTS = {
   watch:  { label: 'Watch',      tone: 'neutral', blurb: 'Slightly over target. Worth monitoring, not acting on yet.' },
   fix:    { label: 'Fix',        tone: 'warn',    blurb: 'Over target with an identifiable cause worth fixing before cutting.' },
   cut:    { label: 'Cut',        tone: 'bad',     blurb: 'Well over target with enough data to be confident. Stop the spend.' },
-  starve: { label: 'Underfunded',tone: 'good',    blurb: 'Efficient but barely funded — the cheapest growth available.' },
+  starve: { label: 'Underfunded',tone: 'good',    blurb: 'Efficient but barely funded, which makes it the cheapest growth available.' },
   thin:   { label: 'No read',    tone: 'muted',   blurb: 'Not enough conversions yet for the cost figure to mean anything.' },
+  restart:{ label: 'Restart',    tone: 'good',    blurb: 'Beat your target while it ran, and is switched off now. Turning it back on is the cheapest test you have.' },
+  stopped:{ label: 'Already off',tone: 'muted',   blurb: 'Not delivering, so there is nothing left to stop. Kept as a record of what did not work.' },
 };
 
 export const scoreEntities = (entities, bench, ds, opts = {}) => {
@@ -1064,7 +1099,7 @@ export const scoreEntities = (entities, bench, ds, opts = {}) => {
       verdict = 'thin';
       const need = o.minConv - m.conv;
       reason = m.conv === 0
-        ? `No ${ds.convLabel.toLowerCase()} yet and only ${fmtMoney(m.spend, ds)} spent — too early to judge.`
+        ? `No ${ds.convLabel.toLowerCase()} yet and only ${fmtMoney(m.spend, ds)} spent, which is too early to judge.`
         : `Only ${m.conv} ${ds.convLabel.toLowerCase()} so far; roughly ${need} more before the cost figure settles.`;
     } else if (m.cpa <= target * o.scaleBand) {
       const underfunded = entities.length > 2 && topWinnerSpend > 0 && m.spend < topWinnerSpend * 0.3;
@@ -1074,7 +1109,7 @@ export const scoreEntities = (entities, bench, ds, opts = {}) => {
         : `${fmtMoney(m.cpa, ds)} against a ${fmtMoney(target, ds)} target across ${m.conv} ${ds.convLabel.toLowerCase()}.`;
     } else if (m.cpa <= target) {
       verdict = 'keep';
-      reason = `${fmtMoney(m.cpa, ds)} — just inside the ${fmtMoney(target, ds)} target.`;
+      reason = `${fmtMoney(m.cpa, ds)}, just inside the ${fmtMoney(target, ds)} target.`;
     } else if (m.cpa <= target * o.watchBand) {
       verdict = 'watch';
       reason = `${fmtMoney(m.cpa, ds)} is ${((m.cpa / target - 1) * 100).toFixed(0)}% over target${ci && ci.low <= target ? ', and the range still reaches target' : ''}.`;
@@ -1091,12 +1126,36 @@ export const scoreEntities = (entities, bench, ds, opts = {}) => {
     // Money that would not have been spent at target efficiency.
     const waste = m.conv > 0 && m.cpa > target ? m.cpaSpend - m.conv * target
       : m.conv === 0 ? m.spend : 0;
-    const savingIfFixed = ['cut', 'fix', 'watch'].includes(verdict) ? Math.max(0, waste) : 0;
+
+    /* Status rewrites the action, not the arithmetic. A switched-off ad that
+       beat target is a restart candidate, which is a real opportunity nobody
+       surfaces; a switched-off ad that lost money is simply history, and
+       telling anyone to "cut" it is noise. */
+    const label2 = ds.convLabel.toLowerCase();
+    if (m.status === 'off') {
+      if (verdict === 'scale' || verdict === 'starve' || verdict === 'keep') {
+        verdict = 'restart';
+        reason = `Delivered at ${fmtMoney(m.cpa, ds)} against a ${fmtMoney(target, ds)} target across ${m.conv} ${label2} while it ran, and it is switched off now.`
+          + (m.conv < 20 ? ' That is a thin base, so treat turning it back on as a test rather than a certainty.' : '');
+      } else if (verdict === 'cut' || verdict === 'fix' || verdict === 'watch') {
+        const cost = m.cpa !== null ? `${fmtMoney(m.cpa, ds)} against a ${fmtMoney(target, ds)} target` : `${fmtMoney(m.spend, ds)} with no ${label2}`;
+        verdict = 'stopped';
+        reason = `${cost} while it ran. It is already switched off, so there is nothing left to stop.`;
+      } else if (verdict === 'thin') {
+        reason += ' It is switched off now, so it will not gather any more.';
+      }
+    }
+
+    const live = m.status !== 'off';
+    const savingIfFixed = live && ['cut', 'fix', 'watch'].includes(verdict) ? Math.max(0, waste) : 0;
 
     return {
       ...e,
       verdict, reason, ci, diagnosis: dx, fatigue, spendShare,
       confident, waste: Math.max(0, waste), savingIfFixed,
+      // Only money still being spent can be saved. The rest is history.
+      recoverable: live ? Math.max(0, waste) : 0,
+      isLive: live, status: m.status,
       vsTarget: m.cpa !== null ? m.cpa / target - 1 : null,
     };
   });
@@ -1105,7 +1164,7 @@ export const scoreEntities = (entities, bench, ds, opts = {}) => {
 /* ============================== FINDINGS ============================== */
 
 const fmtMoney = (v, ds) => {
-  if (v === null || v === undefined || !isFinite(v)) return '—';
+  if (v === null || v === undefined || !isFinite(v)) return '-';
   const sym = ds?.currencySymbol ?? '£';
   return sym + Math.round(v).toLocaleString('en-GB');
 };
@@ -1118,24 +1177,33 @@ export const generateFindings = (scored, bench, ds, opts = {}) => {
   const target = o.targetCpa;
   const out = [];
   const label = ds.convLabel.toLowerCase();
+  const one = ds.convSingular || label.replace(/s$/, '');
   const levelWord = ds.finestLevel === 'ad' ? 'ad' : ds.finestLevel === 'adset' ? 'ad set' : 'campaign';
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const isare = (n) => (n === 1 ? 'is' : 'are');
+  // Every recommendation to spend or stop money applies only to what is
+  // still delivering. Anything switched off is history and belongs in its
+  // own finding, not in an instruction.
+  const anyStatus = scored.some(e => e.status && e.status !== 'unknown');
+  const live = anyStatus ? scored.filter(e => e.isLive) : scored;
+  const off = anyStatus ? scored.filter(e => !e.isLive) : [];
 
   /* 1. Decisive zero-conversion spend */
-  const zeros = scored.filter(e => e.m.conv === 0 && e.m.spend >= target * o.wasteMultiple)
+  const zeros = live.filter(e => e.m.conv === 0 && e.m.spend >= target * o.wasteMultiple)
     .sort((a, b) => b.m.spend - a.m.spend);
   if (zeros.length) {
     const tot = zeros.reduce((s, e) => s + e.m.spend, 0);
     out.push({
       kind: 'cut', severity: 'high', impact: tot,
-      title: `${fmtMoney(tot, ds)} spent on ${zeros.length} ${levelWord}${zeros.length > 1 ? 's' : ''} with zero ${label}`,
-      body: `${zeros.slice(0, 3).map(e => `"${e.name}" (${fmtMoney(e.m.spend, ds)})`).join(', ')}${zeros.length > 3 ? ` and ${zeros.length - 3} more` : ''}. Each has spent more than ${o.wasteMultiple}× the ${fmtMoney(target, ds)} target without a single ${label}, which is enough to stop them.`,
+      title: `${fmtMoney(tot, ds)} still going to ${plural(zeros.length, levelWord)} with zero ${label}`,
+      body: `${zeros.slice(0, 3).map(e => `"${e.name}" (${fmtMoney(e.m.spend, ds)})`).join(', ')}${zeros.length > 3 ? ` and ${zeros.length - 3} more` : ''}. Each has spent more than ${o.wasteMultiple} times the ${fmtMoney(target, ds)} target without a single ${one}, and each is still delivering, so stopping them saves money today.`,
       entities: zeros.slice(0, 8).map(e => e.key),
     });
   }
 
-  /* 2. Overspending above target — the reallocation case */
-  const bad = scored.filter(e => e.verdict === 'cut' && e.m.conv > 0).sort((a, b) => b.waste - a.waste);
-  const best = scored.filter(e => ['scale', 'starve', 'keep'].includes(e.verdict) && e.m.conv >= o.minConv)
+  /* 2. Overspending above target, i.e. the reallocation case */
+  const bad = live.filter(e => e.verdict === 'cut' && e.m.conv > 0).sort((a, b) => b.waste - a.waste);
+  const best = live.filter(e => ['scale', 'starve', 'keep'].includes(e.verdict) && e.m.conv >= o.minConv)
     .sort((a, b) => a.m.cpa - b.m.cpa)[0];
   if (bad.length && best) {
     const totWaste = bad.reduce((s, e) => s + e.waste, 0);
@@ -1144,20 +1212,34 @@ export const generateFindings = (scored, bench, ds, opts = {}) => {
     out.push({
       kind: 'reallocate', severity: 'high', impact: totWaste,
       title: `Moving ${fmtMoney(moveable, ds)} to "${best.name}" would buy roughly ${Math.round(Math.max(0, gained))} more ${label}`,
-      body: `${bad.length} ${levelWord}${bad.length > 1 ? 's' : ''} are running above target at a combined ${fmtMoney(totWaste, ds)} more than target efficiency would have cost. "${best.name}" is delivering at ${fmtMoney(best.m.cpa, ds)}. This assumes its efficiency holds at higher spend, which it usually does not perfectly — treat the number as a ceiling, and step budgets up rather than moving it all at once.`,
+      body: `${plural(bad.length, levelWord)} ${isare(bad.length)} running above target at a combined ${fmtMoney(totWaste, ds)} more than target efficiency would have cost. "${best.name}" is live and delivering at ${fmtMoney(best.m.cpa, ds)}. This assumes its efficiency holds at higher spend, which it usually does not do perfectly, so treat the number as a ceiling and step budgets up rather than moving it all at once.`,
       entities: [best.key, ...bad.slice(0, 5).map(e => e.key)],
     });
   }
 
   /* 3. Efficient but starved */
-  const starved = scored.filter(e => e.verdict === 'starve').sort((a, b) => a.m.cpa - b.m.cpa);
+  const starved = live.filter(e => e.verdict === 'starve').sort((a, b) => a.m.cpa - b.m.cpa);
   if (starved.length) {
     const e = starved[0];
     out.push({
       kind: 'scale', severity: 'medium', impact: e.m.conv * target,
       title: `"${e.name}" delivers ${label} at ${fmtMoney(e.m.cpa, ds)} on only ${fmtMoney(e.m.spend, ds)} of spend`,
-      body: `It has produced ${e.m.conv} ${label} from ${fmtMoney(e.m.spend, ds)}. Efficient and underfunded is the cheapest growth available — raise it in steps of 20–30% and watch whether the cost holds.`,
+      body: `It has produced ${e.m.conv} ${label} from ${fmtMoney(e.m.spend, ds)} and is still delivering. Efficient and underfunded is the cheapest growth available, so raise it in steps of 20 to 30% and watch whether the cost holds.`,
       entities: starved.slice(0, 5).map(e2 => e2.key),
+    });
+  }
+
+  /* 3b. Switched-off winners. Restarting something that already worked is
+     cheaper than finding a new creative, and no report surfaces it. */
+  const restartable = off.filter(e => e.verdict === 'restart').sort((a, b) => a.m.cpa - b.m.cpa);
+  if (restartable.length) {
+    const top = restartable[0];
+    const totConv = restartable.reduce((s, e) => s + e.m.conv, 0);
+    out.push({
+      kind: 'restart', severity: 'medium', impact: totConv * target,
+      title: `${plural(restartable.length, levelWord)} beat your target but ${isare(restartable.length)} switched off`,
+      body: `"${top.name}" delivered ${top.m.conv} ${label} at ${fmtMoney(top.m.cpa, ds)} before it stopped${restartable.length > 1 ? `, and ${restartable.length - 1} more did the same` : ''}. Restarting something that already worked costs less than finding a new creative. Check why each was paused first: a seasonal or promotional ad will not repeat its numbers outside that window, and a short run means a thin base.`,
+      entities: restartable.slice(0, 6).map(e => e.key),
     });
   }
 
@@ -1175,7 +1257,7 @@ export const generateFindings = (scored, bench, ds, opts = {}) => {
   }
 
   /* 5. Diagnosable creative vs landing problems */
-  const ctrProblems = scored.filter(e => e.m.conv >= 1 && e.diagnosis.worst?.stage === 'ctr' && e.m.spend > target)
+  const ctrProblems = live.filter(e => e.m.conv >= 1 && e.diagnosis.worst?.stage === 'ctr' && e.m.spend > target)
     .sort((a, b) => b.m.spend - a.m.spend);
   if (ctrProblems.length) {
     const e = ctrProblems[0];
@@ -1186,7 +1268,7 @@ export const generateFindings = (scored, bench, ds, opts = {}) => {
       entities: ctrProblems.slice(0, 4).map(x => x.key),
     });
   }
-  const cvrProblems = scored.filter(e => e.m.conv >= 1 && e.diagnosis.worst?.stage === 'cvr' && e.m.spend > target)
+  const cvrProblems = live.filter(e => e.m.conv >= 1 && e.diagnosis.worst?.stage === 'cvr' && e.m.spend > target)
     .sort((a, b) => b.m.spend - a.m.spend);
   if (cvrProblems.length) {
     const e = cvrProblems[0];
@@ -1197,7 +1279,7 @@ export const generateFindings = (scored, bench, ds, opts = {}) => {
       entities: cvrProblems.slice(0, 4).map(x => x.key),
     });
   }
-  const cpmProblems = scored.filter(e => e.diagnosis.worst?.stage === 'cpm' && e.m.spend > target * 2)
+  const cpmProblems = live.filter(e => e.diagnosis.worst?.stage === 'cpm' && e.m.spend > target * 2)
     .sort((a, b) => b.m.spend - a.m.spend);
   if (cpmProblems.length) {
     const e = cpmProblems[0];
@@ -1210,7 +1292,7 @@ export const generateFindings = (scored, bench, ds, opts = {}) => {
   }
 
   /* 6. Fatigue */
-  const tired = scored.filter(e => e.fatigue.length && e.m.spend > target).sort((a, b) => b.m.spend - a.m.spend);
+  const tired = live.filter(e => e.fatigue.length && e.m.spend > target).sort((a, b) => b.m.spend - a.m.spend);
   if (tired.length) {
     const e = tired[0];
     out.push({
@@ -1222,15 +1304,29 @@ export const generateFindings = (scored, bench, ds, opts = {}) => {
   }
 
   /* 7. Thin-data warning against premature verdicts */
-  const thin = scored.filter(e => e.verdict === 'thin' && e.m.spend > 0);
+  const thin = live.filter(e => e.verdict === 'thin' && e.m.spend > 0);
   const thinSpend = thin.reduce((s, e) => s + e.m.spend, 0);
   if (thin.length && thinSpend > bench.totals.spend * 0.15) {
     out.push({
       kind: 'patience', severity: 'low', impact: thinSpend,
       title: `${fmtMoney(thinSpend, ds)} (${((thinSpend / bench.totals.spend) * 100).toFixed(0)}% of spend) sits on ${levelWord}s with too few ${label} to judge`,
-      body: `Fewer than ${o.minConv} conversions each means the cost figures there are mostly noise — a single extra conversion swings them by tens of percent. Either concentrate budget so some of them reach a readable volume, or accept that these are tests and hold the verdict.`,
+      body: `Fewer than ${o.minConv} conversions each means the cost figures there are mostly noise, a single extra conversion swings them by tens of percent. Either concentrate budget so some of them reach a readable volume, or accept that these are tests and hold the verdict.`,
       entities: thin.sort((a, b) => b.m.spend - a.m.spend).slice(0, 5).map(e => e.key),
     });
+  }
+
+  /* 7b. How much of this report is history rather than a decision */
+  if (off.length) {
+    const offSpend = off.reduce((s, e) => s + e.m.spend, 0);
+    const share = bench.totals.spend > 0 ? offSpend / bench.totals.spend : 0;
+    if (share > 0.25) {
+      out.push({
+        kind: 'history', severity: 'low', impact: 0,
+        title: `${fmtMoney(offSpend, ds)}, ${(share * 100).toFixed(0)}% of the spend here, sits on ${plural(off.length, levelWord)} that ${isare(off.length)} already switched off`,
+        body: `That money is spent and cannot be recovered, so those rows are a record rather than a decision. They are still worth reading for what worked and what did not. Use the status filter to see only what is live if you want the view that can still be changed.`,
+        entities: [],
+      });
+    }
   }
 
   /* 8. Structural / measurement notes worth acting on */
@@ -1388,6 +1484,10 @@ export const combineEntities = (list, label) => {
     s.indicators.forEach(v => sums.indicators.add(v));
     s.attributions.forEach(v => sums.attributions.add(v));
     s.delivery.forEach(v => sums.delivery.add(v));
+    s.statusMix.forEach(v => sums.statusMix.add(v));
+    if (s.statusAt !== null && (sums.statusAt === null || s.statusAt >= sums.statusAt)) {
+      sums.statusAt = s.statusAt; sums.statusLatest = s.statusLatest;
+    }
     if (s.minDate && (!sums.minDate || s.minDate < sums.minDate)) sums.minDate = s.minDate;
     if (s.maxDate && (!sums.maxDate || s.maxDate > sums.maxDate)) sums.maxDate = s.maxDate;
   }
