@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 /* =====================================================================
-   MetaVision — theme tokens. Dark is a flat void (no ambient movement);
+   MetaVision , theme tokens. Dark is a flat void (no ambient movement);
    light is cool paper with a deep indigo working accent.
    ===================================================================== */
 :root {
@@ -14,8 +14,8 @@
   --edge-soft: rgba(255, 255, 255, 0.05);
   --ink: #e6e9f2;
   --ink-2: #b3bacb;
-  --ink-3: #7d86a0;
-  --ink-4: #5b6480;
+  --ink-3: #949db6;
+  --ink-4: #8b94ab;
 
   --accent: #818cf8;
   --accent-2: #a78bfa;
@@ -26,10 +26,11 @@
   --info: #38bdf8;
 
   --grid: rgba(160, 170, 255, 0.07);
-  --tick: #7d86a0;
+  --tick: #949db6;
   --axis: #4b5470;
   --hover: rgba(255, 255, 255, 0.035);
   --sticky: #0a0a12;
+  --on-accent: #0a0a14;
 }
 
 [data-theme='light'] {
@@ -40,22 +41,23 @@
   --edge-soft: rgba(23, 34, 66, 0.08);
   --ink: #141a2e;
   --ink-2: #33405c;
-  --ink-3: #5a6684;
-  --ink-4: #78849f;
+  --ink-3: #4d5975;
+  --ink-4: #5f6b88;
 
-  --accent: #4f46e5;
-  --accent-2: #7c3aed;
-  --teal: #0d9488;
-  --good: #059669;
-  --warn: #b45309;
-  --bad: #be123c;
-  --info: #0284c7;
+  --accent: #4338ca;
+  --accent-2: #6d28d9;
+  --teal: #0f766e;
+  --good: #047857;
+  --warn: #92400e;
+  --bad: #9f1239;
+  --info: #0369a1;
 
   --grid: rgba(79, 70, 229, 0.12);
-  --tick: #5a6684;
+  --tick: #4d5975;
   --axis: #8b95ad;
   --hover: rgba(23, 34, 66, 0.04);
   --sticky: #f4f6fa;
+  --on-accent: #ffffff;
 }
 
 html, body, #root { min-height: 100%; }
@@ -83,7 +85,7 @@ body {
 }
 .dropzone:hover { border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: var(--hover); }
 
-/* Entrance only — nothing in this app loops. */
+/* Entrance only , nothing in this app loops. */
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 .anim-in { animation: rise 280ms cubic-bezier(.22,.7,.3,1) both; }
 
@@ -113,15 +115,14 @@ input[type='number'], input[type='date'] {
 }
 .btn:hover { color: var(--ink); background: var(--hover); }
 .btn-on {
-  color: #fff; border-color: transparent;
+  color: var(--on-accent); border-color: transparent;
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
 }
-[data-theme='light'] .btn-on { color: #fff; }
 .seg { display: inline-flex; padding: 3px; gap: 2px; border-radius: 12px; border: 1px solid var(--edge); background: var(--panel-lo); }
 /* Descendant, not child: tooltip wrappers sit between .seg and its buttons. */
 .seg button { border-radius: 9px; padding: 6px 12px; font-size: 12px; font-weight: 600; color: var(--ink-3); }
 .seg button:hover { color: var(--ink); }
-.seg button[aria-pressed='true'] { color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+.seg button[aria-pressed='true'] { color: var(--on-accent); background: linear-gradient(135deg, var(--accent), var(--accent-2)); font-weight: 700; }
 .seg > span { display: inline-flex; }
 
 .field {
@@ -196,6 +197,15 @@ input[type='range'] { accent-color: var(--accent); }
 .t-info { color: var(--info); background: color-mix(in srgb, var(--info) 13%, transparent); border-color: color-mix(in srgb, var(--info) 30%, transparent); }
 .t-muted{ color: var(--ink-3); background: var(--hover); border-color: var(--edge); }
 .t-neutral { color: var(--ink-2); background: var(--hover); border-color: var(--edge); }
+
+/* delivery status. A filled ring for live, a hollow one for stopped, so the
+   difference survives greyscale and colour-blindness. */
+.live-dot, .off-dot {
+  width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none;
+}
+.live-dot { background: var(--good); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--good) 22%, transparent); }
+.off-dot { background: var(--ink-4); opacity: 0.75; }
+.seg button .live-dot { margin-right: 6px; }
 
 /* mini share bar */
 .bar { height: 4px; border-radius: 99px; background: var(--edge-soft); overflow: hidden; }
