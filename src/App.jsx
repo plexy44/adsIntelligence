@@ -802,17 +802,29 @@ const RowDetail = ({ e, bench, ds, fmt, ctrl }) => {
               </ul>
             ) : <p className="text-[11.5px]" style={{ color: 'var(--ink-4)' }}>No fatigue or ranking warnings.</p>}
             <div className="mt-3 grid grid-cols-2 gap-y-1.5 text-[11.5px]">
-              {[['Impressions', fmt.int(e.m.impressions)], ['Clicks', fmt.int(e.m.clicks)],
-                ['Reach', e.m.reach === null ? 'n/a' : fmt.int(e.m.reach)],
-                ['Frequency', e.m.frequency === null ? 'n/a' : fmt.dec(e.m.frequency)],
+              {[
+                ['Impressions', fmt.int(e.m.impressions)],
+                ['Clicks', fmt.int(e.m.clicks)],
+                e.m.reachBasis === 'daily'
+                  ? ['Reach, daily average', fmt.int(e.m.reachDailyAvg),
+                    <span>Deduplicated reach for the whole period cannot be recovered from daily rows: someone reached on twenty days would be counted twenty times. This is the average across the {nf(e.m.reachDays)} days it delivered, with a busiest day of <b>{fmt.int(e.m.reachPeak)}</b>. Export without a day breakdown to get true period reach.</span>]
+                  : ['Reach', e.m.reach === null ? 'n/a' : fmt.int(e.m.reach)],
+                e.m.reachBasis === 'daily'
+                  ? ['Frequency, daily average', fmt.dec(e.m.frequencyDaily),
+                    <span>Impressions per person per day, which Meta deduplicates within each day, so this figure is exact. It is a floor on frequency across the whole period, not the period figure itself, because it cannot know who saw the ad on more than one day.</span>]
+                  : ['Frequency', e.m.frequency === null ? 'n/a' : fmt.dec(e.m.frequency)],
                 ['Cost per click', fmt.money(e.m.cpc)],
                 ['Revenue', e.m.revenue ? fmt.money0(e.m.revenue) : '-'],
                 ['ROAS', e.m.roas ? fmt.ratio(e.m.roas) : '-'],
                 ['Days running', e.m.activeDays
                   ? `${nf(e.m.activeDays)}${e.m.spanDays && e.m.spanDays !== e.m.activeDays ? ` of ${nf(e.m.spanDays)}` : ''}`
-                  : 'n/a']].map(([k, v]) => (
+                  : 'n/a'],
+              ].map(([k, v, tip]) => (
                 <React.Fragment key={k}>
-                  <span style={{ color: 'var(--ink-4)' }}>{k}</span><span className="num text-right">{v}</span>
+                  <span style={{ color: 'var(--ink-4)' }}>
+                    {tip ? <Tip tip={tip}><span className="help">{k}</span></Tip> : k}
+                  </span>
+                  <span className="num text-right">{v}</span>
                 </React.Fragment>
               ))}
             </div>
@@ -1028,7 +1040,7 @@ const PerformanceView = ({ ds, scored, bench, ctrl, fmt, series, onFocus, onComp
                 </>}
                 {cols === 'full' && <>
                   <SortHead label="CPC" k="cpc" sort={sort} setSort={setSort} tip="Cost per link click." />
-                  <SortHead label="Freq" k="freq" sort={sort} setSort={setSort} tip="Average times each person saw it. Above about 2.5 in a short window, expect click-through to fall. Unavailable when several rows make up one entity, since reach cannot be added." />
+                  <SortHead label="Freq" k="freq" sort={sort} setSort={setSort} tip={<span>Average times each person saw the ad. Above about 2.5 in a short window, expect click-through to fall.<br /><br />Where an entity spans several days, reach cannot be added up without counting the same person once per day, so the figure shown is the average <b>within</b> a day and is marked <b>/day</b>. Around 1.1 is normal. A rising trend across the run is flagged as fatigue.</span>} />
                   {ds.hasRevenue && <SortHead label="ROAS" k="roas" sort={sort} setSort={setSort} tip="Revenue ÷ spend, where the export carries conversion value." />}
                   <th style={{ textAlign: 'center' }}><Tip tip="Meta's own Quality, Engagement and Conversion rankings against competing ads."><span className="help">Ranks</span></Tip></th>
                 </>}
@@ -1089,7 +1101,12 @@ const PerformanceView = ({ ds, scored, bench, ctrl, fmt, series, onFocus, onComp
                       {cols === 'full' && <>
                         <td className="num">{fmt.money(e.m.cpc)}</td>
                         <td className="num" style={{ color: e.m.frequency >= ctrl.fatigueFreq ? 'var(--warn)' : undefined }}>
-                          {e.m.frequency === null ? 'n/a' : fmt.dec(e.m.frequency)}
+                          {e.m.frequency !== null ? fmt.dec(e.m.frequency)
+                            : e.m.frequencyDaily !== null ? (
+                              <span>{fmt.dec(e.m.frequencyDaily)}
+                                <span className="text-[9px] ml-1" style={{ color: 'var(--ink-4)' }}>/day</span>
+                              </span>
+                            ) : 'n/a'}
                         </td>
                         {ds.hasRevenue && <td className="num">{e.m.roas ? fmt.ratio(e.m.roas) : '-'}</td>}
                         <td style={{ textAlign: 'center' }}><RankDots m={e.m} /></td>
@@ -1157,8 +1174,12 @@ const CompareView = ({ ds, scored, bench, ctrl, fmt, picks, setPicks, series }) 
     { k: 'cvr', label: 'Click → result', get: e => e.m.cvr, fmt: v => fmt.pct(v), better: 'high',
       tip: 'Share of clicks that converted. Differences here point past the ad, to the page and the offer.' },
     { k: 'cpc', label: 'Cost per click', get: e => e.m.cpc, fmt: v => fmt.money(v), better: 'low', tip: 'CPM and CTR combined.' },
-    { k: 'freq', label: 'Frequency', get: e => e.m.frequency, fmt: v => v === null ? 'n/a' : fmt.dec(v), better: 'low',
-      tip: 'Times the average person saw it. Only available where one row covers the whole entity.' },
+    { k: 'freq', label: 'Frequency', get: e => e.m.frequency ?? e.m.frequencyDaily,
+      fmt: v => v === null || v === undefined ? 'n/a' : fmt.dec(v), better: 'low',
+      tip: 'Times the average person saw the ad. Where the entity spans several days this is the average within a day, because reach cannot be added across days without counting the same person repeatedly.' },
+  { k: 'reach', label: 'Reach', get: e => e.m.reach ?? e.m.reachDailyAvg,
+      fmt: v => v === null || v === undefined ? 'n/a' : fmt.int(v), better: 'high',
+      tip: 'People reached. Deduplicated across the whole period only when a single row covers the entity; otherwise this is the average day.' },
     { k: 'roas', label: 'ROAS', get: e => e.m.roas, fmt: v => v ? fmt.ratio(v) : '-', better: 'high', tip: 'Revenue ÷ spend where value is present.' },
   ].filter(r => r.k !== 'roas' || ds.hasRevenue);
 
@@ -1852,7 +1873,7 @@ const BudgetView = ({ ds, scored, bench, ctrl, fmt }) => {
 
 // Bumped on every delivery. If the sidebar does not show this string, the
 // browser is still running an older bundle.
-const BUILD = 'build 2.3 · 2026-08-06';
+const BUILD = 'build 2.4 · 2026-08-06';
 
 const NAV = [
   { id: 'files', label: 'Exports', icon: Database },
