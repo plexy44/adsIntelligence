@@ -292,7 +292,12 @@ const ParseReport = ({ ds, fmt }) => {
           <div>
             <div className="eyebrow mb-1.5">Structure</div>
             <Row k="Levels" v={ds.levelsPresent.map(l => d.entity[l]).join(' → ')} />
-            <Row k="Time" v={ds.timeGrain === 'lifetime' ? 'Lifetime totals (no time column)' : `${d.date} · ${ds.timeGrain}`} />
+            <Row k="Time" v={ds.timeGrain === 'lifetime'
+              ? (ds.periodDays > 1
+                ? `One ${ds.periodDays}-day window, no day breakdown`
+                : 'Single period, no day breakdown')
+              : `${d.date} · ${ds.timeGrain}`} />
+            <Row k="Window" v={ds.reportingRange?.start ? `${ds.reportingRange.start} → ${ds.reportingRange.end}` : null} />
             <Row k="Date order" v={ds.dateOrder === 'mdy' ? 'Month-first (US)' : 'Day-first (UK/EU)'} />
             <Row k="Numbers" v={ds.numberLocale === 'eu' ? 'Decimal comma (EU)' : 'Decimal point'} />
             <Row k="Currency" v={ds.currency} />
@@ -628,9 +633,34 @@ const OverviewView = ({ ds, entities, scored, bench, findings, ctrl, fmt, onFocu
         <Card title="Over time" icon={LayoutDashboard} quiet>
           <div className="flex items-start gap-3 text-[12.5px]" style={{ color: 'var(--ink-3)' }}>
             <Info size={16} className="shrink-0 mt-0.5" style={{ color: 'var(--warn)' }} />
-            <span>This export has no time column, so there is nothing honest to plot over time. Re-export with
-              <b style={{ color: 'var(--ink-2)' }}> Breakdown → By Time → Day</b> and this chart, click-through decay detection
-              and the Change tab all become available.</span>
+            <div className="space-y-2">
+              {ds.reportingRange?.start && ds.reportingRange?.end && ds.periodDays > 1 ? (
+                <>
+                  <p>
+                    There is a date <b style={{ color: 'var(--ink-2)' }}>range</b> here but no date
+                    <b style={{ color: 'var(--ink-2)' }}> breakdown</b>, and a trend needs the second one. All
+                    {' '}{nf(entities.length)} rows carry the same window, {longDate(ds.reportingRange.start)} to{' '}
+                    {longDate(ds.reportingRange.end)}, so {ds.periodDays} days are condensed into one total per{' '}
+                    {ctrl.level === 'ad' ? 'ad' : ctrl.level === 'adset' ? 'ad set' : 'campaign'}. One point per row cannot make a line.
+                  </p>
+                  <p>
+                    Across that window spend averaged{' '}
+                    <span className="num" style={{ color: 'var(--ink)' }}>{fmt.money(bench.totals.spend / ds.periodDays)}</span> a day
+                    {bench.totals.conv > 0 && <> and {ds.convLabel.toLowerCase()} arrived at about{' '}
+                      <span className="num" style={{ color: 'var(--ink)' }}>{nf(bench.totals.conv / ds.periodDays, 1)}</span> a day</>}
+                    . Everything else in the app works normally on this file; only time-based views are unavailable.
+                  </p>
+                  <p>
+                    To get the trend, re-export with <b style={{ color: 'var(--ink-2)' }}>Breakdown → By Time → Day</b>. That
+                    repeats each row once per day, which is what your Ads-level export does.
+                  </p>
+                </>
+              ) : (
+                <p>This export has one row per entity with no time breakdown, so there is nothing to plot over time.
+                  Re-export with <b style={{ color: 'var(--ink-2)' }}>Breakdown → By Time → Day</b> and this chart,
+                  click-through decay detection and the Change tab all become available.</p>
+              )}
+            </div>
           </div>
         </Card>
       )}
@@ -1204,10 +1234,10 @@ const CompareView = ({ ds, scored, bench, ctrl, fmt, picks, setPicks, series }) 
               const sig = test.p < 0.05;
               const winner = test.r1 > test.r2 ? a : b;
               const loser = test.r1 > test.r2 ? b : a;
-              // z scales with the square root of volume, so the extra volume
-              // needed for a verdict follows directly.
-              const scale = Math.pow(1.96 / Math.abs(test.z), 2);
-              const extra = Math.max(0, Math.round((a.m.conv + b.m.conv) * (scale - 1)));
+              const gap = (a.m.cpa !== null && b.m.cpa !== null) ? Math.abs(a.m.cpa - b.m.cpa) : null;
+              const pct = (x) => x === null || !isFinite(x) ? '—' : `${(x * 100).toFixed(x < 0.1 ? 1 : 0)}%`;
+              // Round to something a person would actually say out loud.
+              const roundish = (v) => v < 50 ? Math.ceil(v / 5) * 5 : Number(v.toPrecision(2));
               return (
                 <div key={b.key} className="card card-quiet px-4 py-3">
                   <div className="flex items-start gap-2.5">
@@ -1218,15 +1248,26 @@ const CompareView = ({ ds, scored, bench, ctrl, fmt, picks, setPicks, series }) 
                       {sig ? (
                         <>
                           <b>{winner.name}</b> really is producing results more cheaply than <b>{loser.name}</b>
-                          {' '}({fmt.money(winner.m.cpa)} against {fmt.money(loser.m.cpa)}). At {(100 * (1 - test.p)).toFixed(1)}%
-                          confidence this gap is bigger than random variation, so it is safe to act on.
+                          {' '}({fmt.money(winner.m.cpa)} against {fmt.money(loser.m.cpa)}, a {fmt.money(gap)} gap per result).
+                          At {(100 * (1 - test.p)).toFixed(1)}% confidence that is bigger than random variation, so it is
+                          safe to act on.
+                        </>
+                      ) : test.extraIsRealistic ? (
+                        <>
+                          <b>{a.name}</b> ({fmt.money(a.m.cpa)}) and <b>{b.name}</b> ({fmt.money(b.m.cpa)}) differ by
+                          {' '}{fmt.money(gap)} per result, about {pct(test.obsRel)}, which is
+                          <b> not yet distinguishable from noise</b>. Roughly {nf(roundish(test.extraConv))} more conversions
+                          between them, about {test.volumeMultiple.toFixed(1)}× the volume so far, would settle it. Killing the
+                          dearer one today would be a coin toss dressed up as a decision.
                         </>
                       ) : (
                         <>
-                          The gap between <b>{a.name}</b> ({fmt.money(a.m.cpa)}) and <b>{b.name}</b> ({fmt.money(b.m.cpa)}) is
-                          <b> not distinguishable from noise</b> yet. Roughly {extra} more conversions between them would be
-                          needed before the difference could be called. Killing the more expensive one now would be a coin toss
-                          dressed up as a decision.
+                          <b>{a.name}</b> ({fmt.money(a.m.cpa)}) and <b>{b.name}</b> ({fmt.money(b.m.cpa)}) are within
+                          {' '}{fmt.money(gap)} of each other, about {pct(test.obsRel)}. At these volumes this comparison can
+                          only resolve gaps of roughly <b>{pct(test.mdeRel)}</b> or more, so a difference this small is
+                          invisible however much longer you run them. Read them as
+                          <b> performing the same</b> and choose between them on other grounds: creative variety, audience
+                          overlap, or which one is fatiguing.
                         </>
                       )}
                     </div>
@@ -1467,8 +1508,13 @@ const ChangeView = ({ ds, ctrl, fmt, filters }) => {
       <Card title="Change over time" icon={History} quiet>
         <div className="flex items-start gap-3 text-[12.5px]" style={{ color: 'var(--ink-3)' }}>
           <Info size={16} className="shrink-0 mt-0.5" style={{ color: 'var(--warn)' }} />
-          <span>Comparing periods needs day-level rows. Re-export with <b style={{ color: 'var(--ink-2)' }}>Breakdown → By
-            Time → Day</b>, or load a second file covering the earlier period and switch between them.</span>
+          <span>
+            {ds.periodDays > 1
+              ? `Every row in this export covers the same ${ds.periodDays}-day window, so there are no earlier and later halves to compare. `
+              : 'Comparing periods needs rows split by day. '}
+            Re-export with <b style={{ color: 'var(--ink-2)' }}>Breakdown → By Time → Day</b>, or load a second export
+            covering the earlier period and switch between the two files.
+          </span>
         </div>
       </Card>
     );
@@ -1710,6 +1756,10 @@ const BudgetView = ({ ds, scored, bench, ctrl, fmt }) => {
 /* APP SHELL                                                              */
 /* ===================================================================== */
 
+// Bumped on every delivery. If the sidebar does not show this string, the
+// browser is still running an older bundle.
+const BUILD = 'build 2.1 · 2026-08-05';
+
 const NAV = [
   { id: 'files', label: 'Exports', icon: Database },
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -1878,6 +1928,7 @@ export default function App() {
               <div>
                 <div className="font-bold leading-none">Meta<span style={{ color: 'var(--ink-3)', fontWeight: 300 }}>Vision</span></div>
                 <div className="eyebrow mt-1" style={{ letterSpacing: '0.14em' }}>Decision engine</div>
+                <div className="num text-[9px] mt-0.5" style={{ color: 'var(--ink-4)' }}>{BUILD}</div>
               </div>
             </div>
           </div>
