@@ -154,7 +154,18 @@ input[type='range'] { accent-color: var(--accent); }
   position: sticky; left: 0; z-index: 1; background: var(--sticky);
   border-right: 1px solid var(--edge);
 }
-.tbl tbody tr:hover .stick { background: color-mix(in srgb, var(--sticky) 88%, var(--ink)); }
+/* Row actions pinned to the right edge. With the "Everything" column set the
+   table scrolls sideways, and the compare and expand buttons used to sit off
+   screen where they could not be reached. */
+.tbl .stick-r {
+  position: sticky; right: 0; z-index: 1; background: var(--sticky);
+  border-left: 1px solid var(--edge);
+}
+/* The header's own pinned cells must outrank the body's, or scrolled rows
+   paint over the column titles. */
+.tbl thead th.stick, .tbl thead th.stick-r { z-index: 4; }
+.tbl tbody tr:hover .stick,
+.tbl tbody tr:hover .stick-r { background: color-mix(in srgb, var(--sticky) 88%, var(--ink)); }
 .sortable { cursor: pointer; user-select: none; }
 .sortable:hover { color: var(--ink); }
 
