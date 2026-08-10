@@ -1476,6 +1476,19 @@ const SegmentsView = ({ ds, ctrl, fmt, filters }) => {
   useEffect(() => { if (modes.length && !modes.some(m => m.id === mode)) setMode(modes[0].id); }, [modes, mode]);
   const active = modes.find(m => m.id === mode);
 
+  /* Any worked example here is drawn from the user's own loaded file. A
+     hardcoded one would embed whatever account the feature was developed
+     against into the product, and it would be wrong for everyone else. */
+  const overlapExample = useMemo(() => {
+    if (!active || active.exclusive || !active.tags) return null;
+    for (const e of entities) {
+      const parts = naming.split(e.name).map(p => p.toLowerCase());
+      const hits = active.tags.filter(t => parts.includes(t.token.toLowerCase()));
+      if (hits.length >= 2) return { name: e.name, a: hits[0].token, b: hits[1].token };
+    }
+    return null;
+  }, [active, entities, naming]);
+
   const result = useMemo(() => {
     if (!active) return null;
     let raw;
@@ -1551,9 +1564,13 @@ const SegmentsView = ({ ds, ctrl, fmt, filters }) => {
         <div className="card card-quiet px-4 py-3 flex items-start gap-2.5">
           <AlertTriangle size={15} className="shrink-0 mt-0.5" style={{ color: 'var(--warn)' }} />
           <p className="text-[11.5px] leading-relaxed" style={{ color: 'var(--ink-3)' }}>
-            These groups overlap. An ad named <span className="num">Lucy_IG_01 - Post</span> counts under both
-            <span className="num"> IG</span> and <span className="num"> Post</span>, so the spend column adds up to more
-            than the account total. Read each row on its own; do not add them together.
+            These groups overlap, so the spend column adds up to more than the account total.
+            {overlapExample && (
+              <> For example <span className="num">{overlapExample.name}</span> is counted under both{' '}
+                <span className="num">{overlapExample.a}</span> and{' '}
+                <span className="num">{overlapExample.b}</span>.</>
+            )}
+            {' '}Read each row on its own rather than adding them together.
           </p>
         </div>
       )}
@@ -1905,7 +1922,7 @@ const BudgetView = ({ ds, scored, bench, ctrl, fmt }) => {
 /* Builds carry a name so a screenshot can be placed at a glance. The date
    beside it is today's, read at load, so it always reflects the session
    rather than whenever the bundle happened to be compiled. */
-const BUILD = { version: '2.5', name: 'Lucent' };
+const BUILD = { version: '2.6', name: 'Lucent' };
 const todayLabel = () => new Date().toLocaleDateString('en-GB',
   { day: '2-digit', month: 'short', year: 'numeric' });
 
