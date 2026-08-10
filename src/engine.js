@@ -292,9 +292,9 @@ export const canonicalIndicator = (raw) => {
 };
 
 /* Delivery status. An export is a history book as much as a control panel:
-   on a real account most rows are ads that stopped months ago. Advice that
-   ignores this tells you to pause things already paused and to pour budget
-   into a Black Friday ad that has been off since December. */
+   in a mature account most rows are entities that stopped delivering long
+   ago. Advice that ignores this tells you to pause what is already paused,
+   and to pour budget into a seasonal creative that has been off for months. */
 const OFF_STATES = /^(inactive|paused|archived|deleted|not[_ ]delivering|completed|ended|rejected|disapproved|error|campaign[_ ]off|adset[_ ]off)/;
 const LIVE_STATES = /^(active|delivering|learning|in[_ ]review|scheduled|pending|processing)/;
 
@@ -588,9 +588,9 @@ export const parseMetaCSV = (text, fileName = 'Export') => {
     const allClicks = get('allClicks');
     /* Some column sets ship the click RATES but not the click COUNT. Meta
        computes CTR = clicks / impressions and CPC = spend / clicks, so the
-       count is exactly recoverable; on a real 43k-row export both routes
-       agreed on every single row. Without this, click-through rate reads as
-       a flat 0% and the whole funnel diagnosis silently disappears. */
+       count is exactly recoverable, and the two routes agree to the unit
+       wherever both columns are present. Without this, click-through rate
+       reads as a flat zero and the funnel diagnosis silently disappears. */
     let clicks = linkClicks !== null ? linkClicks : allClicks;
     if (clicks === null) {
       const ctrPct = roleIdx.ctr ? num(cols[roleIdx.ctr.index]) : null;
@@ -667,11 +667,11 @@ export const parseMetaCSV = (text, fileName = 'Export') => {
   /* --- blank Result indicator ---------------------------------------------
      Meta leaves Result indicator empty on any row where the entity produced
      no results in that period. Treating blank as "a different goal" and
-     excluding its spend understates cost per result badly: on a real account
-     it moved blended CPA from £20.85 to £14.09. So each entity's blank rows
-     inherit that entity's own stated goal, and entities that never state one
-     inherit the account's primary goal, which keeps their spend visible as
-     waste rather than hiding it. */
+     excluding its spend understates cost per result badly, easily by a third
+     on an account where most days produce nothing. So each entity's blank
+     rows inherit that entity's own stated goal, and entities that never state
+     one inherit the account's primary goal, which keeps their spend visible
+     as waste rather than hiding it. */
   const goalByEntity = new Map();
   for (const r of rows) {
     if (!r.indicator) continue;
@@ -880,9 +880,9 @@ const addRow = (a, r, ds) => {
 
 export const deriveMetrics = (a, opts = {}) => {
   /* Reach is the one Meta metric that cannot be added up: a person reached on
-     twenty different days is one person counted twenty times. On a real ad,
-     summing daily reach gave 631,798 against a true period reach of 375,975,
-     and turned a frequency of 1.83 into 1.07, which would make a fatiguing ad
+     twenty different days is one person counted twenty times. Summing daily
+     reach can overstate the deduplicated figure by more than half, which
+     drags frequency down by the same proportion and makes a fatiguing entity
      look completely fresh.
 
      So the deduplicated period figure is only reported when a single row
@@ -1435,10 +1435,10 @@ export const generateFindings = (scored, bench, ds, opts = {}) => {
 
 /* Structured names are the only route to cross-level analysis in real
    exports, because an Ads export contains no campaign or ad set column at
-   all. But real naming is not rigidly positional: on a live account
-   "EMTone_11 - Video" has three parts and "MCR-Red-carpet-contour_CS_17 -
-   Post" has seven, and the format sits at the end of one and nowhere in
-   another. So position is a weak signal and vocabulary is a strong one. */
+   all. But naming in practice is not rigidly positional: one name may have
+   three parts and the next seven, with the format token sitting at the end of
+   one and absent from another. So position is a weak signal and vocabulary is
+   a strong one. */
 
 export const splitName = (s) =>
   String(s || '').split(/[_|>·\-–—/]+|\s{2,}/).map(t => t.trim()).filter(Boolean);
@@ -1520,7 +1520,7 @@ export const analyseNaming = (entities, opts = {}) => {
   });
 
   /* --- 4. recurring tags: overlapping, not a partition --------------------
-     The single most useful view on a real account, because it answers "how
+     The single most useful view on a large account, because it answers "how
      do all my video ads compare with all my static ones" without requiring
      the naming to be positional. An entity can carry several tags, so these
      groups deliberately overlap and their spend does not sum to the total. */
