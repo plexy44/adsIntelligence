@@ -1720,28 +1720,4 @@ export const toCSV = (rows, headers) => {
     ...rows.map(r => headers.map(h => esc(h.get(r))).join(','))].join('\n');
 };
 
-/* ========================= PER-ENTITY SERIES ========================= */
-
-// Daily series keyed by the same entity key aggregate() produces, so the
-// table and its sparklines can never disagree about what a row is.
-export const entitySeries = (ds, level, filters = {}) => {
-  const out = new Map();
-  if (ds.timeGrain === 'lifetime') return out;
-  for (const r of ds.rows) {
-    if (!r.date) continue;
-    if (filters.dateFrom && r.date < filters.dateFrom) continue;
-    if (filters.dateTo && r.date > filters.dateTo) continue;
-    if (filters.indicator && r.indicator !== filters.indicator) continue;
-    const k = entityKey(r, level);
-    if (!out.has(k)) out.set(k, new Map());
-    const byDate = out.get(k);
-    if (!byDate.has(r.date)) byDate.set(r.date, blankSums());
-    addRow(byDate.get(r.date), r, ds);
-  }
-  const final = new Map();
-  out.forEach((byDate, k) => {
-    const dates = [...byDate.keys()].sort();
-    final.set(k, dates.map(d => ({ date: d, ...deriveMetrics(byDate.get(d)) })));
-  });
-  return final;
-};
+/* ========================= PER-ENTITY
