@@ -8,6 +8,7 @@ import {
 import {
   Upload, Database, LayoutDashboard, Table2, Crosshair, GitCompare, Boxes,
   History, Wallet, Sun, Moon, AlertTriangle, CheckCircle2, Info, X, Trash2,
+  Camera, Save, FolderInput, Clock, ArrowUpRight, ArrowDownRight,
   Pencil, Download, Copy, ChevronRight, ChevronDown, ChevronUp, Search,
   Target, Scissors, TrendingUp, TrendingDown, Flame, ShieldAlert, Lightbulb,
   Gauge, Sparkles, ArrowRight, RefreshCw, SlidersHorizontal, FileWarning,
@@ -17,6 +18,8 @@ import {
   parseMetaCSV, aggregate, buildBenchmarks, scoreEntities, generateFindings,
   analyseNaming, comparePeriods, timeSeries, simulateReallocation, entitySeries,
   entityKey, compareRates, median, VERDICTS, DEFAULTS, toCSV, groupByDimension,
+  buildSnapshot, diffSnapshots, matchWorkspace, nameOverlap, serialiseWorkspace,
+  parseWorkspaceFile, mergeWorkspaces, workspaceSize, newId, comparability,
 } from './engine.js';
 
 /* ===================================================================== */
@@ -206,8 +209,15 @@ const useSort = (rows, initial, getters) => {
 const store = {
   open: () => new Promise((res, rej) => {
     try {
-      const r = indexedDB.open('metavision_db', 1);
-      r.onupgradeneeded = () => r.result.createObjectStore('files', { keyPath: 'id' });
+      // Version 2 adds snapshot history. The store name is unchanged so
+      // that files already loaded on someone's machine survive the upgrade.
+      const r = indexedDB.open('metavision_db', 2);
+      r.onupgradeneeded = () => {
+        const db = r.result;
+        if (!db.objectStoreNames.contains('files')) db.createObjectStore('files', { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('workspaces')) db.createObjectStore('workspaces', { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('snapshots')) db.createObjectStore('snapshots', { keyPath: 'id' });
+      };
       r.onsuccess = () => res(r.result);
       r.onerror = () => rej(r.error);
     } catch (e) { rej(e); }
@@ -224,6 +234,35 @@ const store = {
     const q = db.transaction('files', 'readwrite').objectStore('files').delete(id);
     q.onsuccess = () => res(); q.onerror = () => res();
   })).catch(() => {}),
+
+  // Generic access for the snapshot stores.
+  readAll: (name) => store.open().then(db => new Promise((res) => {
+    const q = db.transaction(name).objectStore(name).getAll();
+    q.onsuccess = () => res(q.result || []); q.onerror = () => res([]);
+  })).catch(() => []),
+  write: (name, rows) => store.open().then(db => new Promise((res) => {
+    const tx = db.transaction(name, 'readwrite');
+    const os = tx.objectStore(name);
+    rows.forEach(r => os.put(r));
+    tx.oncomplete = () => res(); tx.onerror = () => res();
+  })).catch(() => {}),
+  remove: (name, id) => store.open().then(db => new Promise((res) => {
+    const q = db.transaction(name, 'readwrite').objectStore(name).delete(id);
+    q.onsuccess = () => res(); q.onerror = () => res();
+  })).catch(() => {}),
+};
+
+/* Browser storage is evictable. Chrome grants persistence on engagement,
+   Firefox prompts, and Safari clears IndexedDB after seven days without a
+   visit, which a weekly tool sits right on top of. Ask for persistence,
+   and treat the workspace file as the actual record either way. */
+const requestPersistence = async () => {
+  try {
+    if (!navigator.storage?.persist) return { supported: false, persisted: false };
+    const already = await navigator.storage.persisted?.();
+    if (already) return { supported: true, persisted: true };
+    return { supported: true, persisted: await navigator.storage.persist() };
+  } catch { return { supported: false, persisted: false }; }
 };
 
 const useStored = (key, fallback) => {
@@ -1913,6 +1952,396 @@ const BudgetView = ({ ds, scored, bench, ctrl, fmt }) => {
   );
 };
 
+
+
+/* Confirming the account is deliberate. A silent wrong match writes one
+   account's history into another's, and nothing on screen would ever
+   reveal it. The guess is pre-selected so the common path is one click. */
+const MatchDialog = ({ ask, fmt, onCancel, onConfirm }) => {
+  const { snap, match } = ask;
+  const proposed = match.confident ? match.best.workspace.id : '';
+  const [choice, setChoice] = useState(proposed);
+  const [name, setName] = useState(ask.name);
+  const others = match.all.filter(m => m.workspace.id !== proposed);
+
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center px-4"
+      style={{ background: 'color-mix(in srgb, var(--bg) 72%, transparent)', backdropFilter: 'blur(6px)' }}
+      onClick={onCancel}>
+      <div className="card anim-in w-full" style={{ maxWidth: 520 }} onClick={e => e.stopPropagation()}>
+        <div className="px-5 pt-5 pb-3 flex items-center gap-2">
+          <Camera size={15} style={{ color: 'var(--accent)' }} />
+          <span className="eyebrow">Which account is this?</span>
+        </div>
+        <div className="px-5 pb-5 space-y-3">
+          {match.confident ? (
+            <p className="text-[12.5px] leading-relaxed" style={{ color: 'var(--ink-3)' }}>
+              This looks like <b style={{ color: 'var(--ink)' }}>{match.best.workspace.name}</b>.
+              {' '}<span className="num">{match.best.overlap?.shared}</span> of{' '}
+              <span className="num">{Math.min(match.best.overlap?.sizeA, match.best.overlap?.sizeB)}</span> names match
+              the last snapshot there, so they are almost certainly the same account.
+            </p>
+          ) : (
+            <p className="text-[12.5px] leading-relaxed" style={{ color: 'var(--ink-3)' }}>
+              Meta exports carry no account identifier, so the only way to recognise an account is by the names inside it.
+              Nothing here resembles a workspace you already have, so this is probably a new one.
+            </p>
+          )}
+
+          <div className="space-y-2">
+            <label className={`card card-quiet px-3 py-2.5 flex items-center gap-2.5 cursor-pointer ${choice === '' ? '' : 'opacity-70'}`}
+              style={choice === '' ? { borderColor: 'color-mix(in srgb, var(--accent) 45%, var(--edge))' } : undefined}>
+              <input type="radio" name="ws" checked={choice === ''} onChange={() => setChoice('')} />
+              <span className="flex-1">
+                <span className="text-[12px] font-semibold">Start a new account</span>
+                {choice === '' && (
+                  <input className="field w-full mt-2 text-[12px]" value={name} autoFocus
+                    onChange={e => setName(e.target.value)} placeholder="Name it, for example Client, ad level" />
+                )}
+              </span>
+            </label>
+
+            {match.all.filter(m => m.workspace).map(m => (
+              <label key={m.workspace.id}
+                className={`card card-quiet px-3 py-2.5 flex items-center gap-2.5 cursor-pointer ${choice === m.workspace.id ? '' : 'opacity-70'}`}
+                style={choice === m.workspace.id ? { borderColor: 'color-mix(in srgb, var(--accent) 45%, var(--edge))' } : undefined}>
+                <input type="radio" name="ws" checked={choice === m.workspace.id}
+                  onChange={() => setChoice(m.workspace.id)} />
+                <span className="flex-1 flex items-baseline justify-between gap-3">
+                  <span className="text-[12px] font-semibold truncate">{m.workspace.name}</span>
+                  <span className="num text-[10px] shrink-0" style={{ color: m.score >= 0.6 ? 'var(--good)' : 'var(--ink-4)' }}>
+                    {m.score > 0 ? `${(m.score * 100).toFixed(0)}% of names match` : 'no overlap'}
+                  </span>
+                </span>
+              </label>
+            ))}
+          </div>
+
+          <div className="flex items-center justify-between gap-3 pt-1">
+            <span className="text-[11px]" style={{ color: 'var(--ink-4)' }}>
+              {nf(snap.entities.length)} entities, {snap.period?.start ? `${shortDate(snap.period.start)} to ${shortDate(snap.period.end)}` : 'no period'}
+            </span>
+            <span className="flex gap-2">
+              <button className="btn px-3 py-1.5 text-[12px] font-semibold" onClick={onCancel}>Cancel</button>
+              <button className="btn btn-on px-3.5 py-1.5 text-[12px] font-semibold"
+                disabled={choice === '' && !name.trim()}
+                onClick={() => onConfirm(choice || null, name.trim())}>Save snapshot</button>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>, document.body);
+};
+
+/* ===================================================================== */
+/* HISTORY: snapshots, the diff, and the workspace file                   */
+/* ===================================================================== */
+
+const VERDICT_TONE = { good: 't-good', warn: 't-warn', bad: 't-bad', neutral: 't-neutral', muted: 't-muted' };
+
+const Delta = ({ v, invert, fmt }) => {
+  if (v === null || v === undefined || !isFinite(v)) return <span style={{ color: 'var(--ink-4)' }}>-</span>;
+  const good = invert ? v < 0 : v > 0;
+  const flat = Math.abs(v) < 0.005;
+  return (
+    <span className="num inline-flex items-center gap-0.5"
+      style={{ color: flat ? 'var(--ink-4)' : good ? 'var(--good)' : 'var(--bad)' }}>
+      {!flat && (v > 0 ? <ArrowUpRight size={11} /> : <ArrowDownRight size={11} />)}
+      {v > 0 ? '+' : ''}{(v * 100).toFixed(1)}%
+    </span>
+  );
+};
+
+const HistoryView = ({ ds, scored, bench, ctrl, fmt, snaps, actions }) => {
+  const { workspaces, snapshots, activeWorkspace } = snaps;
+  const [pair, setPair] = useState({ a: null, b: null });
+  const [busy, setBusy] = useState(null);
+  const importRef = useRef(null);
+
+  const mine = useMemo(() => snapshots
+    .filter(s => s.workspaceId === activeWorkspace)
+    .sort((x, y) => y.capturedAt.localeCompare(x.capturedAt)), [snapshots, activeWorkspace]);
+
+  // Newest against the one before it, unless the user picks otherwise.
+  useEffect(() => {
+    if (mine.length >= 2) setPair(p => (p.a && p.b && mine.some(s => s.id === p.a) && mine.some(s => s.id === p.b))
+      ? p : { b: mine[0].id, a: mine[1].id });
+    else setPair({ a: null, b: null });
+  }, [mine]);
+
+  const before = mine.find(s => s.id === pair.a);
+  const after = mine.find(s => s.id === pair.b);
+  const diff = useMemo(() => (before && after ? diffSnapshots(before, after, { targetCpa: ctrl.targetCpa }) : null),
+    [before, after, ctrl.targetCpa]);
+
+  const ws = workspaces.find(w => w.id === activeWorkspace);
+  const size = useMemo(() => workspaceSize(workspaces, snapshots), [workspaces, snapshots]);
+
+  return (
+    <div className="anim-in space-y-5">
+      {/* ---- save the current file as a snapshot ---- */}
+      {ds && (
+        <Card title="Record where things stand" icon={Camera}
+          right={<span className="num text-[11px]" style={{ color: 'var(--ink-4)' }}>
+            {(size / 1024).toFixed(0)}KB stored
+          </span>}>
+          <div className="flex flex-wrap items-center gap-3">
+            <button className="btn btn-on px-3.5 py-2 text-[12px] font-semibold inline-flex items-center gap-2"
+              disabled={busy === 'save'} onClick={async () => { setBusy('save'); await actions.saveSnapshot(); setBusy(null); }}>
+              <Save size={13} /> {busy === 'save' ? 'Saving' : 'Save snapshot'}
+            </button>
+            <span className="text-[12px]" style={{ color: 'var(--ink-3)' }}>
+              Stores the {nf(scored.length)} judged {ctrl.level === 'ad' ? 'ads' : ctrl.level === 'adset' ? 'ad sets' : 'campaigns'} and
+              the account totals, not the file itself, so a year of weekly snapshots costs a couple of megabytes.
+            </span>
+          </div>
+        </Card>
+      )}
+
+      {/* ---- the workspace ---- */}
+      <Card title="Workspace" icon={Boxes}
+        right={
+          <div className="flex items-center gap-2">
+            <Tip tip="Download every snapshot as a single file. Browsers can clear their own storage, and Safari does so after seven days without a visit, so this file is the actual record. Back it up, move it between machines, or hand it to a colleague.">
+              <button className="btn px-2.5 py-1.5 text-[11px] font-semibold inline-flex items-center gap-1.5"
+                onClick={() => actions.exportWorkspace()}>
+                <Download size={12} /> Export
+              </button>
+            </Tip>
+            <Tip tip="Load a workspace file. Nothing is overwritten: anything already held is kept and only new snapshots are added.">
+              <button className="btn px-2.5 py-1.5 text-[11px] font-semibold inline-flex items-center gap-1.5"
+                onClick={() => importRef.current?.click()}>
+                <FolderInput size={12} /> Import
+              </button>
+            </Tip>
+            <input ref={importRef} type="file" accept=".json,application/json" className="hidden"
+              onChange={async e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) await actions.importWorkspace(f); }} />
+          </div>
+        }>
+        {workspaces.length ? (
+          <div className="flex flex-wrap gap-2">
+            {workspaces.map(w => {
+              const n = snapshots.filter(s => s.workspaceId === w.id).length;
+              return (
+                <button key={w.id} className={`btn px-3 py-1.5 text-[12px] font-semibold ${w.id === activeWorkspace ? 'btn-on' : ''}`}
+                  onClick={() => actions.setActiveWorkspace(w.id)}>
+                  {w.name}<span className="ml-1.5 opacity-60 num">{n}</span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-[12.5px]" style={{ color: 'var(--ink-3)' }}>
+            No history yet. Load an export and save a snapshot, then do the same next week. From the second snapshot
+            onward this page shows what moved, which is the one thing Ads Manager cannot tell you, because it has no
+            memory of what you decided.
+          </p>
+        )}
+      </Card>
+
+      {/* ---- the snapshots ---- */}
+      {!!mine.length && (
+        <Card title={`${mine.length} snapshot${mine.length === 1 ? '' : 's'}${ws ? ` in ${ws.name}` : ''}`} icon={Clock} pad={false}>
+          <div className="px-5 pb-5 overflow-auto scroll" style={{ maxHeight: '38vh' }}>
+            <table className="tbl">
+              <thead><tr>
+                <th className="stick" style={{ textAlign: 'left' }}>Taken</th>
+                <th style={{ textAlign: 'left' }}>Period</th>
+                <th>Spend</th><th>Results</th><th>Cost</th><th>Entities</th>
+                <th style={{ textAlign: 'center' }}>Compare</th><th style={{ width: 34 }} />
+              </tr></thead>
+              <tbody>
+                {mine.map(s => (
+                  <tr key={s.id}>
+                    <td className="stick" style={{ textAlign: 'left' }}>
+                      <div className="num text-[12px]">{longDate(s.capturedAt.slice(0, 10))}</div>
+                      <div className="text-[10px]" style={{ color: 'var(--ink-4)' }}>
+                        {s.level} · target {fmt.money0(s.ruleset?.targetCpa)}
+                      </div>
+                    </td>
+                    <td className="num text-[11px]" style={{ textAlign: 'left', color: 'var(--ink-3)' }}>
+                      {s.period?.start ? `${shortDate(s.period.start)} to ${shortDate(s.period.end)}` : 'not stated'}
+                    </td>
+                    <td className="num">{fmt.money0(s.totals.spend)}</td>
+                    <td className="num">{fmt.int(s.totals.conv)}</td>
+                    <td className="num">{fmt.money(s.totals.cpa)}</td>
+                    <td className="num">{fmt.int(s.totals.entities)}</td>
+                    <td style={{ textAlign: 'center' }}>
+                      <div className="inline-flex gap-1">
+                        <button className={`btn px-2 py-0.5 text-[10px] ${pair.a === s.id ? 'btn-on' : ''}`}
+                          onClick={() => setPair(p => ({ ...p, a: s.id }))}>from</button>
+                        <button className={`btn px-2 py-0.5 text-[10px] ${pair.b === s.id ? 'btn-on' : ''}`}
+                          onClick={() => setPair(p => ({ ...p, b: s.id }))}>to</button>
+                      </div>
+                    </td>
+                    <td>
+                      <button className="btn p-1" aria-label="Delete snapshot"
+                        onClick={() => actions.deleteSnapshot(s.id)}><Trash2 size={12} /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      {mine.length === 1 && (
+        <Card quiet>
+          <p className="text-[12.5px] py-2 text-center" style={{ color: 'var(--ink-4)' }}>
+            One snapshot held. Save another after your next export and this page will show what moved between them.
+          </p>
+        </Card>
+      )}
+
+      {diff && <DiffReport diff={diff} fmt={fmt} ctrl={ctrl} ds={ds} />}
+    </div>
+  );
+};
+
+const DiffReport = ({ diff, fmt, ctrl, ds }) => {
+  const label = ds?.convLabel || 'Results';
+  const cause = {
+    attribution: 'Spend for those days is unchanged, so this is attribution maturing rather than a fault. It also means the most recent week of any export understates conversions.',
+    scope: 'Spend moved as well and the two exports cover different sets of entities, so this is a different export scope rather than restated figures. Not a data problem.',
+    restated: 'Both spend and conversions moved across the same set of entities, which is unusual. Worth checking the export settings matched.',
+    unknown: 'The cause is not clear from these two snapshots alone.',
+  };
+  return (
+    <div className="space-y-4">
+      <Card title={(() => {
+        const d1 = diff.from.capturedAt.slice(0, 10), d2 = diff.to.capturedAt.slice(0, 10);
+        const t = (iso) => new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        // Same-day snapshots need the time, or the heading reads as nonsense.
+        return d1 === d2
+          ? `What moved between ${t(diff.from.capturedAt)} and ${t(diff.to.capturedAt)} on ${longDate(d1)}`
+          : `What moved between ${longDate(d1)} and ${longDate(d2)}`;
+      })()} icon={History}>
+        {!diff.comparable.ok && (
+          <div className="card card-quiet px-4 py-3 flex items-start gap-2.5 mb-4">
+            <AlertTriangle size={15} className="shrink-0 mt-0.5" style={{ color: 'var(--warn)' }} />
+            <p className="text-[11.5px] leading-relaxed" style={{ color: 'var(--ink-3)' }}>
+              These two are not strictly comparable: {diff.comparable.reasons.join('; ')}. Read the differences below with that in mind.
+            </p>
+          </div>
+        )}
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+          {[['Spend', diff.totals.spend, v => fmt.money0(v), false],
+            [label, diff.totals.conv, v => fmt.int(v), false],
+            ['Cost per result', diff.totals.cpa, v => fmt.money(v), true],
+            ['CTR', diff.totals.ctr, v => fmt.pct(v), false],
+            ['Conversion rate', diff.totals.cvr, v => fmt.pct(v), false]].map(([name, t, f, invert]) => (
+            <div key={name} className="card card-quiet px-3.5 py-3">
+              <div className="eyebrow mb-1.5">{name}</div>
+              <div className="num text-[17px] font-bold">{f(t.after)}</div>
+              <div className="flex items-baseline gap-1.5 mt-1">
+                <Delta v={t.change} invert={invert} />
+                <span className="num text-[10px]" style={{ color: 'var(--ink-4)' }}>was {f(t.before)}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {!!diff.transitions.length && (
+        <Card title={`${diff.transitions.length} changed verdict`} icon={ArrowRight}
+          right={<span className="text-[11px]" style={{ color: 'var(--ink-4)' }}>
+            {diff.improved.length} improved, {diff.worsened.length} worse
+          </span>}>
+          <div className="overflow-auto scroll" style={{ maxHeight: '40vh' }}>
+            <table className="tbl">
+              <thead><tr>
+                <th className="stick" style={{ textAlign: 'left' }}>{ctrl.level}</th>
+                <th style={{ textAlign: 'left' }}>Was</th><th style={{ textAlign: 'left' }}>Now</th>
+                <th>Spend</th><th>Cost</th><th>Change</th>
+              </tr></thead>
+              <tbody>
+                {diff.transitions.map(t => (
+                  <tr key={t.key}>
+                    <td className="stick" style={{ textAlign: 'left' }}>
+                      <div className="font-semibold truncate max-w-[260px]" title={t.name}>{t.name}</div>
+                    </td>
+                    <td style={{ textAlign: 'left' }}><Badge verdict={t.from} /></td>
+                    <td style={{ textAlign: 'left' }}><Badge verdict={t.to} /></td>
+                    <td className="num">{fmt.money0(t.spend)}</td>
+                    <td className="num">{fmt.money(t.cpaAfter)}</td>
+                    <td><Delta v={t.cpaChange} invert /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      {!!diff.drifting.length && (
+        <Card title={`${diff.drifting.length} drifting toward target`} icon={AlertTriangle}
+          right={<Tip tip="Still inside target, but rising and now within ten percent of it. A warning is only useful while there is still time to act on it.">
+            <span className="chip t-warn help"><Info size={10} />Early warning</span></Tip>}>
+          <div className="space-y-1.5">
+            {diff.drifting.slice(0, 8).map(d => (
+              <div key={d.key} className="flex items-center justify-between gap-3 text-[12px]">
+                <span className="truncate" title={d.name}>{d.name}</span>
+                <span className="num shrink-0" style={{ color: 'var(--ink-3)' }}>
+                  {fmt.money(d.cpaBefore)} to {fmt.money(d.cpaAfter)} <Delta v={d.change} invert />
+                </span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      <div className="grid lg:grid-cols-2 gap-4">
+        {!!diff.appeared.length && (
+          <Card title={`${diff.appeared.length} new since last time`} icon={Sparkles} quiet>
+            <div className="space-y-1 text-[12px]">
+              {diff.appeared.slice(0, 8).map(e => (
+                <div key={e.key} className="flex items-center justify-between gap-3">
+                  <span className="truncate" title={e.name}>{e.name}</span>
+                  <span className="num shrink-0" style={{ color: 'var(--ink-4)' }}>{fmt.money0(e.spend)}</span>
+                </div>
+              ))}
+              {diff.appeared.length > 8 && <div className="text-[11px]" style={{ color: 'var(--ink-4)' }}>and {diff.appeared.length - 8} more</div>}
+            </div>
+          </Card>
+        )}
+        {!!diff.departed.length && (
+          <Card title={`${diff.departed.length} no longer present`} icon={FileWarning} quiet>
+            <div className="space-y-1 text-[12px]">
+              {diff.departed.slice(0, 8).map(e => (
+                <div key={e.key} className="flex items-center justify-between gap-3">
+                  <span className="truncate" title={e.name}>{e.name}</span>
+                  <span className="num shrink-0" style={{ color: 'var(--ink-4)' }}>{fmt.money0(e.spend)}</span>
+                </div>
+              ))}
+              {diff.departed.length > 8 && <div className="text-[11px]" style={{ color: 'var(--ink-4)' }}>and {diff.departed.length - 8} more</div>}
+            </div>
+          </Card>
+        )}
+      </div>
+
+      {diff.restatement && (
+        <Card title="The same days changed between exports" icon={Info} quiet>
+          <p className="text-[12.5px] leading-relaxed" style={{ color: 'var(--ink-3)' }}>
+            {diff.restatement.changedDays} of the {diff.restatement.days} days present in both snapshots now report different
+            figures. Conversions across the shared period went from{' '}
+            <span className="num" style={{ color: 'var(--ink)' }}>{fmt.int(diff.restatement.convBefore)}</span> to{' '}
+            <span className="num" style={{ color: 'var(--ink)' }}>{fmt.int(diff.restatement.convAfter)}</span>
+            {diff.restatement.convChange !== null && <> ({(diff.restatement.convChange * 100).toFixed(1)}%)</>}.
+            {' '}{cause[diff.restatement.likelyCause]}
+          </p>
+        </Card>
+      )}
+
+      {!diff.transitions.length && !diff.appeared.length && !diff.departed.length && !diff.drifting.length && (
+        <Card quiet><p className="text-[12.5px] py-3 text-center" style={{ color: 'var(--ink-4)' }}>
+          Nothing changed category between these two snapshots. Steady is usually good.
+        </p></Card>
+      )}
+    </div>
+  );
+};
+
 /* ===================================================================== */
 /* APP SHELL                                                              */
 /* ===================================================================== */
@@ -1933,6 +2362,7 @@ const NAV = [
   { id: 'compare', label: 'Compare', icon: GitCompare },
   { id: 'segments', label: 'Segments', icon: Boxes },
   { id: 'change', label: 'Change', icon: History },
+  { id: 'history', label: 'History', icon: Clock },
   { id: 'budget', label: 'Budget', icon: Wallet },
 ];
 
@@ -2053,6 +2483,94 @@ export default function App() {
   const findings = useMemo(() => ds ? generateFindings(scoredAll, bench, ds, ctrl) : [], [scoredAll, bench, ds, ctrl]);
   const series = useMemo(() => ds ? entitySeries(ds, ctrl.level, filters) : new Map(), [ds, ctrl.level, filters]);
 
+  /* ---------------- snapshot history ---------------- */
+  const [workspaces, setWorkspaces] = useState([]);
+  const [snapshots, setSnapshots] = useState([]);
+  const [activeWorkspace, setActiveWorkspace] = useStored('mv_ws', null);
+  const [toast, setToast] = useState(null);
+  const [matchAsk, setMatchAsk] = useState(null);
+  const say = useCallback((msg) => { setToast(msg); setTimeout(() => setToast(null), 5000); }, []);
+
+  useEffect(() => {
+    Promise.all([store.readAll('workspaces'), store.readAll('snapshots')])
+      .then(([w, s]) => {
+        setWorkspaces(w);
+        setSnapshots(s.sort((x, y) => x.capturedAt.localeCompare(y.capturedAt)));
+      }).catch(() => {});
+    requestPersistence();
+  }, []);
+
+  // Built fresh so a snapshot always reflects what is on screen right now.
+  const draftSnapshot = useCallback(() => {
+    if (!ds) return null;
+    const ts = ds.timeGrain === 'lifetime' ? { points: [] } : timeSeries(ds, { grain: 'day' });
+    return buildSnapshot(ds, scoredAll, bench, ctrl, { daily: ts.points });
+  }, [ds, scoredAll, bench, ctrl]);
+
+  const commitSnapshot = useCallback(async (snap, workspaceId, workspaceName) => {
+    let wsId = workspaceId;
+    let nextWorkspaces = workspaces;
+    if (!wsId) {
+      const w = { id: newId(), name: workspaceName || ds?.fileName || 'Account', createdAt: new Date().toISOString() };
+      nextWorkspaces = [...workspaces, w];
+      wsId = w.id;
+      setWorkspaces(nextWorkspaces);
+      await store.write('workspaces', [w]);
+    }
+    const saved = { ...snap, workspaceId: wsId };
+    setSnapshots(prev => [...prev, saved].sort((x, y) => x.capturedAt.localeCompare(y.capturedAt)));
+    setActiveWorkspace(wsId);
+    await store.write('snapshots', [saved]);
+    const n = snapshots.filter(s => s.workspaceId === wsId).length + 1;
+    say(n === 1
+      ? 'Snapshot saved. Save another after your next export and the History tab will show what moved.'
+      : `Snapshot saved. ${n} now held for this account.`);
+    setMatchAsk(null);
+  }, [workspaces, snapshots, ds, setActiveWorkspace, say]);
+
+  const saveSnapshot = useCallback(async () => {
+    const snap = draftSnapshot();
+    if (!snap) return;
+    const m = matchWorkspace(snap, workspaces, snapshots);
+    // Confident matches still get confirmed. A silent wrong match corrupts
+    // the history in a way nobody would ever notice.
+    setMatchAsk({ snap, match: m, name: ds?.fileName || 'Account' });
+  }, [draftSnapshot, workspaces, snapshots, ds]);
+
+  const exportWorkspace = useCallback(() => {
+    const text = serialiseWorkspace(workspaces, snapshots);
+    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+    const el = document.createElement('a');
+    el.href = url;
+    el.download = `sementra-workspace-${new Date().toISOString().slice(0, 10)}.json`;
+    el.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    say(`Exported ${snapshots.length} snapshot${snapshots.length === 1 ? '' : 's'}. Keep this file somewhere safe: it is the record, the browser is only a cache.`);
+  }, [workspaces, snapshots, say]);
+
+  const importWorkspace = useCallback(async (file) => {
+    try {
+      const parsed = parseWorkspaceFile(await file.text());
+      const merged = mergeWorkspaces({ workspaces, snapshots }, parsed);
+      setWorkspaces(merged.workspaces);
+      setSnapshots(merged.snapshots);
+      await store.write('workspaces', merged.workspaces);
+      await store.write('snapshots', merged.snapshots);
+      if (!activeWorkspace && merged.workspaces.length) setActiveWorkspace(merged.workspaces[0].id);
+      say(`Imported ${merged.added.snapshots} new snapshot${merged.added.snapshots === 1 ? '' : 's'}` +
+        (merged.skipped ? `, and kept ${merged.skipped} already held.` : '.'));
+    } catch (e) { say(e.message); }
+  }, [workspaces, snapshots, activeWorkspace, setActiveWorkspace, say]);
+
+  const deleteSnapshot = useCallback(async (id) => {
+    setSnapshots(prev => prev.filter(s => s.id !== id));
+    await store.remove('snapshots', id);
+  }, []);
+
+  const snapActions = useMemo(() => ({
+    saveSnapshot, exportWorkspace, importWorkspace, deleteSnapshot, setActiveWorkspace,
+  }), [saveSnapshot, exportWorkspace, importWorkspace, deleteSnapshot, setActiveWorkspace]);
+
   const focus = (key) => { setSearch(key); setTab('performance'); };
   const addCompare = (key) => {
     setPicks(p => p.includes(key) ? p : [...p, key].slice(-4));
@@ -2061,7 +2579,7 @@ export default function App() {
 
   const NavBtn = ({ id, label, icon: Icon }) => {
     const on = tab === id;
-    const disabled = !ds && id !== 'files';
+    const disabled = !ds && id !== 'files' && id !== 'history';
     return (
       <button disabled={disabled} onClick={() => setTab(id)} data-on={on ? 'true' : 'false'}
         className="nav-item w-full flex items-center gap-2.5 px-2.5 py-2 rounded-2xl border text-[13px] font-medium"
@@ -2089,6 +2607,24 @@ export default function App() {
     <ThemeCtx.Provider value={theme}>
       <div className="min-h-screen flex relative">
         <div className="ambient" aria-hidden />
+
+        {toast && (
+          <div className="fixed bottom-5 left-1/2 z-[9998] anim-in"
+            style={{ transform: 'translateX(-50%)', maxWidth: 'min(560px, 92vw)' }}>
+            <div className="card px-4 py-3 flex items-start gap-2.5">
+              <CheckCircle2 size={15} className="shrink-0 mt-0.5" style={{ color: 'var(--good)' }} />
+              <span className="text-[12px] leading-relaxed">{toast}</span>
+              <button className="btn p-1 shrink-0 ml-1" onClick={() => setToast(null)} aria-label="Dismiss">
+                <X size={12} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {matchAsk && (
+          <MatchDialog ask={matchAsk} fmt={fmt} onCancel={() => setMatchAsk(null)}
+            onConfirm={(wsId, name) => commitSnapshot(matchAsk.snap, wsId, name)} />
+        )}
         <aside className="fixed inset-y-0 left-0 w-[236px] hidden md:flex flex-col z-30"
           style={{
             background: 'color-mix(in srgb, var(--sticky) 72%, transparent)',
@@ -2106,7 +2642,7 @@ export default function App() {
                 <Gauge size={17} style={{ color: 'var(--on-accent)' }} />
               </span>
               <div>
-                <div className="font-bold leading-none">Meta<span style={{ color: 'var(--ink-3)', fontWeight: 300 }}>Vision</span></div>
+                <div className="font-bold leading-none">Sem<span style={{ color: 'var(--ink-3)', fontWeight: 300 }}>entra</span></div>
                 <div className="eyebrow mt-1" style={{ letterSpacing: '0.14em' }}>Decision engine</div>
                 <div className="num text-[9px] mt-1 leading-tight" style={{ color: 'var(--ink-4)' }}>
                   <span style={{ color: 'var(--accent)' }}>{BUILD.name}</span> v{BUILD.version}
@@ -2262,6 +2798,7 @@ export default function App() {
                   {tab === 'segments' && <>Patterns across <span className="font-bold">segments</span></>}
                   {tab === 'change' && <>What <span className="font-bold">changed</span></>}
                   {tab === 'budget' && <>Where the <span className="font-bold">budget</span> should go</>}
+                  {tab === 'history' && <>What changed <span className="font-bold">since last time</span></>}
                 </h1>
               </header>
             )}
@@ -2270,7 +2807,7 @@ export default function App() {
               <IngestionView files={files} activeId={activeId} onAdd={addFile} onRemove={removeFile}
                 onRename={renameFile} onSelect={(id) => { setActiveId(id); setTab('overview'); }} />
             )}
-            {!ds && tab !== 'files' && (
+            {!ds && tab !== 'files' && tab !== 'history' && (
               <Card quiet><p className="text-[13px] py-8 text-center" style={{ color: 'var(--ink-4)' }}>
                 Load an export first.</p></Card>
             )}
@@ -2291,6 +2828,10 @@ export default function App() {
             )}
             {ds && tab === 'change' && (
               <ChangeView ds={ds} ctrl={ctrl} fmt={fmt} filters={filters} />
+            )}
+            {tab === 'history' && (
+              <HistoryView ds={ds} scored={scoredAll} bench={bench} ctrl={ctrl} fmt={fmt}
+                snaps={{ workspaces, snapshots, activeWorkspace }} actions={snapActions} />
             )}
             {ds && tab === 'budget' && (
               <BudgetView ds={ds} scored={scored} bench={bench} ctrl={ctrl} fmt={fmt} />
